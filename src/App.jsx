@@ -8,7 +8,6 @@ const MAX_FORWARD_SPEED = 260 // world units per second
 const ACCELERATION = 140
 const BRAKE_DECELERATION = 220
 const TURN_RATE = 1.8
-const DRAG = 0.8
 
 const controlKeys = {
   forward: ['w', 'arrowup'],
@@ -81,6 +80,12 @@ function createInitialBoatState() {
     y: MAP_SIZE / 2,
     heading: -Math.PI / 2,
     speed: 0,
+    sailLevel: 0.4,
+    sailTarget: 0.4,
+    idleTime: 0,
+    anchorState: 'stowed',
+    anchorProgress: 0,
+    wakeTimer: 0,
   }
 }
 
@@ -282,27 +287,79 @@ function App() {
       }
 
       if (commands.forward) {
-        current.speed = Math.min(current.speed + ACCELERATION * dt, MAX_FORWARD_SPEED)
+        current.sailTarget = clamp(current.sailTarget + dt * 0.7, 0, 1)
       }
 
       if (commands.backward) {
-        current.speed = Math.max(current.speed - BRAKE_DECELERATION * dt, 0)
+        current.sailTarget = clamp(current.sailTarget - dt * 0.7, 0, 1)
       }
 
-      if (!commands.forward && !commands.backward) {
-        const dragFactor = Math.max(0, 1 - DRAG * dt)
-        current.speed *= dragFactor
-        if (current.speed < 2) {
-          current.speed = 0
+      const sailDiff = current.sailTarget - current.sailLevel
+      if (Math.abs(sailDiff) > 0.0001) {
+        const sailChangeRate = 1.6
+        const delta = Math.sign(sailDiff) * Math.min(Math.abs(sailDiff), sailChangeRate * dt)
+        current.sailLevel = clamp(current.sailLevel + delta, 0, 1)
+      }
+
+      const attemptingToMove = commands.forward || commands.left || commands.right
+      const movingSpeedThreshold = 6
+      const isMoving = current.speed > movingSpeedThreshold
+      const anchorBlocking = ['dropping', 'anchored', 'weighing'].includes(current.anchorState)
+
+      if (!anchorBlocking && !isMoving && !attemptingToMove) {
+        current.idleTime += dt
+      } else if (attemptingToMove || isMoving) {
+        current.idleTime = 0
+      }
+
+      if (current.anchorState === 'stowed' && current.idleTime >= 3) {
+        current.anchorState = 'dropping'
+        current.anchorProgress = 0
+      }
+
+      if (current.anchorState === 'dropping') {
+        current.anchorProgress = Math.min(1, current.anchorProgress + dt)
+        current.speed = Math.max(0, current.speed - BRAKE_DECELERATION * dt)
+        if (current.anchorProgress >= 1) {
+          current.anchorState = 'anchored'
+        }
+      } else if (current.anchorState === 'anchored') {
+        current.anchorProgress = 1
+        current.speed = 0
+        if (attemptingToMove) {
+          current.anchorState = 'weighing'
+          current.anchorProgress = 0
+        }
+      } else if (current.anchorState === 'weighing') {
+        current.anchorProgress = Math.min(1, current.anchorProgress + dt)
+        current.speed = 0
+        if (current.anchorProgress >= 1) {
+          current.anchorState = 'stowed'
+          current.anchorProgress = 0
+          current.idleTime = 0
         }
       }
 
+      const canAccelerate = !['dropping', 'anchored', 'weighing'].includes(current.anchorState)
+      const desiredSpeed = canAccelerate ? current.sailLevel * MAX_FORWARD_SPEED : 0
+
+      if (current.speed < desiredSpeed) {
+        current.speed = Math.min(desiredSpeed, current.speed + ACCELERATION * dt)
+      } else if (current.speed > desiredSpeed) {
+        current.speed = Math.max(desiredSpeed, current.speed - BRAKE_DECELERATION * dt)
+      }
+
+      if (desiredSpeed < 6 && current.speed < 6 && !attemptingToMove) {
+        current.speed = 0
+      }
+
+      const canSteer = !['anchored', 'weighing'].includes(current.anchorState)
       const turnStrength = 0.6 + Math.min(current.speed / MAX_FORWARD_SPEED, 1)
 
-      if (commands.left) {
+      if (canSteer && commands.left) {
         current.heading -= TURN_RATE * dt * turnStrength
       }
-      if (commands.right) {
+      if (canSteer && commands.right) {
         current.heading += TURN_RATE * dt * turnStrength
       }
 
@@ -316,6 +373,8 @@ function App() {
       } else {
         current.speed = Math.min(current.speed, 38)
       }
+
+      current.wakeTimer = (current.wakeTimer + dt * (0.8 + Math.min(current.speed / MAX_FORWARD_SPEED, 1) * 3)) % 1000
 
       boatRef.current = current
       setBoatState(current)
@@ -385,7 +444,7 @@ function App() {
       try {
         await navigator.clipboard.writeText(seed)
         setCopyStatus('Seed copied!')
-      } catch (error) {
+      } catch {
         setCopyStatus('Copy unavailable')
       }
     } else {
@@ -481,6 +540,7 @@ function drawScene(ctx, viewport, boat, islands, waves) {
   ctx.imageSmoothingEnabled = false
   paintSea(ctx, width, height, camera, waves)
   drawIslands(ctx, islands, camera)
+  drawBoatWake(ctx, boat, camera)
   drawBoat(ctx, boat, camera)
   addVignette(ctx, width, height)
 }
@@ -559,6 +619,97 @@ function drawIslands(ctx, islands, camera) {
   }
 }
 
+function drawBoatWake(ctx, boat, camera) {
+  const wakeStrength = Math.min(boat.speed / MAX_FORWARD_SPEED, 1)
+  if (wakeStrength <= 0.02) {
+    return
+  }
+
+  const screenX = boat.x - camera.x
+  const screenY = boat.y - camera.y
+
+  ctx.save()
+  ctx.translate(screenX, screenY)
+  ctx.rotate(boat.heading)
+
+  const wakeLength = 90 + wakeStrength * 120
+  const wakeWidth = 18 + wakeStrength * 32
+
+  ctx.globalCompositeOperation = 'lighter'
+  ctx.globalAlpha = 0.32 * wakeStrength
+  const wakeGradient = ctx.createLinearGradient(0, 0, -wakeLength, 0)
+  wakeGradient.addColorStop(0, 'rgba(200, 240, 255, 0.85)')
+  wakeGradient.addColorStop(1, 'rgba(200, 240, 255, 0)')
+  ctx.fillStyle = wakeGradient
+  ctx.beginPath()
+  ctx.moveTo(-10, wakeWidth * 0.55)
+  ctx.quadraticCurveTo(-wakeLength * 0.55, wakeWidth * 0.8, -wakeLength, 0)
+  ctx.quadraticCurveTo(-wakeLength * 0.55, -wakeWidth * 0.8, -10, -wakeWidth * 0.55)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.globalAlpha = 0.28 * wakeStrength
+  ctx.strokeStyle = 'rgba(225, 248, 255, 0.9)'
+  ctx.lineWidth = 2
+  for (let i = 1; i <= 3; i += 1) {
+    const t = i / 3
+    const rippleX = -18 - t * (wakeLength - 24)
+    const rippleWidth = wakeWidth * (0.5 + t * 0.7)
+    const pulse = Math.sin(boat.wakeTimer * 4 + i * 1.6) * 2
+    ctx.beginPath()
+    ctx.moveTo(rippleX, -rippleWidth + pulse)
+    ctx.quadraticCurveTo(rippleX - wakeLength * 0.04, 0, rippleX, rippleWidth - pulse)
+    ctx.stroke()
+  }
+
+  const sprayStrength = Math.min(boat.speed / (MAX_FORWARD_SPEED * 0.7), 1)
+  if (sprayStrength > 0.05) {
+    const eased = sprayStrength * sprayStrength * (3 - 2 * sprayStrength)
+
+    for (const side of [-1, 1]) {
+      ctx.globalAlpha = 0.26 * sprayStrength
+      ctx.fillStyle = 'rgba(214, 242, 255, 0.88)'
+      ctx.beginPath()
+      ctx.moveTo(48, side * 4)
+      ctx.quadraticCurveTo(40, side * (10 + eased * 8), 24, side * (16 + eased * 12))
+      ctx.lineTo(20, side * (12 + eased * 8))
+      ctx.quadraticCurveTo(36, side * (6 + eased * 6), 48, side * 2)
+      ctx.closePath()
+      ctx.fill()
+
+      ctx.globalAlpha = 0.42 * sprayStrength
+      ctx.strokeStyle = 'rgba(235, 252, 255, 0.95)'
+      ctx.lineWidth = 1.5 + eased * 1.2
+
+      for (let i = 0; i < 3; i += 1) {
+        const flow = i / 2.4
+        const startX = 50 - flow * 5.5
+        const startY = side * (3 + flow * 2.6)
+        const midX = 40 - eased * (8 + flow * 6)
+        const midY = side * (8 + eased * 10 + flow * 5.5)
+        const endX = 26 - eased * (11 + flow * 5.5)
+        const endY = side * (15 + eased * 14 + flow * 5.5)
+        ctx.beginPath()
+        ctx.moveTo(startX, startY)
+        ctx.quadraticCurveTo(midX, midY, endX, endY)
+        ctx.stroke()
+      }
+    }
+
+    ctx.globalAlpha = 0.3 * sprayStrength
+    ctx.strokeStyle = 'rgba(190, 226, 244, 0.8)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(44, 0)
+    ctx.quadraticCurveTo(32, 0, 18, 0)
+    ctx.stroke()
+
+    ctx.globalAlpha = 1
+  }
+
+  ctx.restore()
+}
+
 function drawBoat(ctx, boat, camera) {
   const screenX = boat.x - camera.x
   const screenY = boat.y - camera.y
@@ -566,10 +717,11 @@ function drawBoat(ctx, boat, camera) {
   ctx.translate(screenX, screenY)
   ctx.rotate(boat.heading)
 
-  drawBoatShadow(ctx)
+  drawBoatShadow(ctx, boat)
   drawBoatHull(ctx)
   drawDeckDetails(ctx)
-  drawMastAndSails(ctx)
+  drawAnchor(ctx, boat)
+  drawMastAndSails(ctx, boat)
 
   ctx.restore()
 }
@@ -627,87 +779,243 @@ function sprinkleDetails(ctx, island) {
   ctx.restore()
 }
 
-function drawBoatShadow(ctx) {
+function drawBoatShadow(ctx, boat) {
   ctx.save()
-  ctx.globalAlpha = 0.25
-  ctx.fillStyle = 'rgba(22, 32, 42, 0.35)'
+  const stretch = Math.min(boat.speed / MAX_FORWARD_SPEED, 1)
+  ctx.globalAlpha = 0.22 + stretch * 0.08
+  ctx.fillStyle = 'rgba(22, 32, 42, 0.4)'
+  const bowLength = 46 + stretch * 18
   ctx.beginPath()
-  ctx.moveTo(0, 42)
-  ctx.quadraticCurveTo(24, 30, 32, 0)
-  ctx.quadraticCurveTo(0, 18, -32, 0)
-  ctx.quadraticCurveTo(-24, 30, 0, 42)
+  ctx.moveTo(bowLength, 0)
+  ctx.quadraticCurveTo(28, 20, -40, 16)
+  ctx.quadraticCurveTo(-52, 0, -40, -16)
+  ctx.quadraticCurveTo(28, -20, bowLength, 0)
+  ctx.closePath()
   ctx.fill()
   ctx.restore()
 }
 
 function drawBoatHull(ctx) {
-  const hullGradient = ctx.createLinearGradient(0, -42, 0, 42)
-  hullGradient.addColorStop(0, '#f4cfa5')
-  hullGradient.addColorStop(0.4, '#b87a3b')
-  hullGradient.addColorStop(1, '#6b3a16')
+  const hullGradient = ctx.createLinearGradient(-48, 0, 52, 0)
+  hullGradient.addColorStop(0, '#6b3a16')
+  hullGradient.addColorStop(0.35, '#b87a3b')
+  hullGradient.addColorStop(0.7, '#e7c493')
+  hullGradient.addColorStop(1, '#f7dcb1')
   ctx.fillStyle = hullGradient
   ctx.beginPath()
-  ctx.moveTo(0, -46)
-  ctx.lineTo(20, -14)
-  ctx.lineTo(16, 34)
-  ctx.lineTo(0, 48)
-  ctx.lineTo(-16, 34)
-  ctx.lineTo(-20, -14)
+  ctx.moveTo(54, 0)
+  ctx.quadraticCurveTo(40, -20, 8, -24)
+  ctx.quadraticCurveTo(-30, -22, -46, -8)
+  ctx.quadraticCurveTo(-56, 0, -46, 8)
+  ctx.quadraticCurveTo(-30, 22, 8, 24)
+  ctx.quadraticCurveTo(40, 20, 54, 0)
   ctx.closePath()
   ctx.fill()
 
-  ctx.strokeStyle = '#341d0e'
+  ctx.strokeStyle = '#392010'
   ctx.lineWidth = 3
   ctx.stroke()
 
-  ctx.strokeStyle = '#ffe0b8'
+  ctx.strokeStyle = 'rgba(255, 236, 204, 0.85)'
   ctx.lineWidth = 2
   ctx.beginPath()
-  ctx.moveTo(0, -40)
-  ctx.lineTo(12, -12)
-  ctx.lineTo(8, 28)
-  ctx.lineTo(0, 36)
-  ctx.lineTo(-8, 28)
-  ctx.lineTo(-12, -12)
-  ctx.closePath()
+  ctx.moveTo(36, -12)
+  ctx.quadraticCurveTo(10, -18, -32, -10)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(36, 12)
+  ctx.quadraticCurveTo(10, 18, -32, 10)
   ctx.stroke()
 }
 
 function drawDeckDetails(ctx) {
-  ctx.fillStyle = '#d9a864'
-  ctx.fillRect(-10, -6, 20, 18)
-  ctx.fillStyle = '#8c592e'
-  ctx.fillRect(-6, 6, 12, 10)
+  ctx.save()
 
-  ctx.fillStyle = '#fbe7c7'
-  ctx.fillRect(-3, -24, 6, 10)
+  ctx.fillStyle = '#d2a369'
+  ctx.beginPath()
+  ctx.moveTo(44, 0)
+  ctx.quadraticCurveTo(28, -12, -30, -10)
+  ctx.quadraticCurveTo(-36, 0, -30, 10)
+  ctx.quadraticCurveTo(28, 12, 44, 0)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.fillStyle = '#c28d4f'
+  ctx.beginPath()
+  ctx.moveTo(-12, -10)
+  ctx.lineTo(-30, -9)
+  ctx.quadraticCurveTo(-34, 0, -30, 9)
+  ctx.lineTo(-12, 10)
+  ctx.quadraticCurveTo(-6, 0, -12, -10)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.fillStyle = '#f6e3bb'
+  ctx.fillRect(-8, -6, 44, 12)
+
+  ctx.strokeStyle = 'rgba(92, 58, 30, 0.45)'
+  ctx.lineWidth = 1.6
+  ctx.beginPath()
+  ctx.moveTo(-28, -8)
+  ctx.lineTo(38, -4)
+  ctx.moveTo(-28, 8)
+  ctx.lineTo(38, 4)
+  ctx.stroke()
+
+  ctx.strokeStyle = 'rgba(255, 245, 220, 0.55)'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(-36, 0)
+  ctx.lineTo(36, 0)
+  ctx.stroke()
+
+  ctx.fillStyle = '#855b34'
+  ctx.beginPath()
+  ctx.moveTo(-26, -7)
+  ctx.quadraticCurveTo(-34, 0, -26, 7)
+  ctx.lineTo(-10, 7)
+  ctx.quadraticCurveTo(-4, 0, -10, -7)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.fillStyle = '#f0f7ff'
+  ctx.fillRect(-18, -4, 6, 8)
+
+  ctx.fillStyle = '#fff3d0'
+  ctx.beginPath()
+  ctx.moveTo(36, 0)
+  ctx.lineTo(24, -8)
+  ctx.lineTo(24, 8)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.fillStyle = 'rgba(220, 60, 46, 0.9)'
+  ctx.beginPath()
+  ctx.moveTo(42, 0)
+  ctx.lineTo(30, -10)
+  ctx.lineTo(30, 10)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.restore()
 }
 
-function drawMastAndSails(ctx) {
-  ctx.fillStyle = '#5c3b1d'
-  ctx.fillRect(-2, -42, 4, 36)
-  ctx.fillRect(-1, -48, 2, 6)
-  ctx.fillStyle = '#ff3b3b'
-  ctx.fillRect(2, -46, 10, 6)
-  ctx.fillStyle = '#f0f6ff'
+function drawAnchor(ctx, boat) {
+  if (boat.anchorState === 'stowed' && boat.anchorProgress === 0) {
+    return
+  }
+
+  let progress = 0
+  if (boat.anchorState === 'dropping') {
+    progress = boat.anchorProgress
+  } else if (boat.anchorState === 'anchored') {
+    progress = 1
+  } else if (boat.anchorState === 'weighing') {
+    progress = 1 - boat.anchorProgress
+  }
+
+  const eased = progress * progress * (3 - 2 * progress)
+  const lineLength = 26 + eased * 46
+  const lateralLean = 6 + eased * 18
+  const sway = Math.sin(boat.wakeTimer * 1.4) * (1 + eased * 2)
+
+  ctx.save()
+  ctx.translate(-22, 16)
+
+  ctx.fillStyle = '#b48b56'
   ctx.beginPath()
-  ctx.moveTo(2, -38)
-  ctx.lineTo(36, -6)
-  ctx.lineTo(2, -6)
-  ctx.closePath()
+  ctx.arc(0, 0, 5.5, 0, Math.PI * 2)
   ctx.fill()
 
-  ctx.fillStyle = '#cddff8'
-  ctx.beginPath()
-  ctx.moveTo(-2, -32)
-  ctx.lineTo(-34, -2)
-  ctx.lineTo(-2, -2)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.strokeStyle = '#2b2f45'
+  ctx.strokeStyle = 'rgba(240, 228, 198, 0.9)'
   ctx.lineWidth = 2
-  ctx.strokeRect(-2, -42, 4, 36)
+  ctx.beginPath()
+  ctx.moveTo(0, 0)
+  ctx.quadraticCurveTo(-lateralLean * 0.45 - sway, lineLength * 0.55, -lateralLean - sway * 0.3, lineLength)
+  ctx.stroke()
+
+  ctx.strokeStyle = 'rgba(172, 146, 110, 0.35)'
+  ctx.lineWidth = 3.2
+  ctx.beginPath()
+  ctx.moveTo(-2, 0)
+  ctx.quadraticCurveTo(-lateralLean * 0.5 - sway, lineLength * 0.52, -lateralLean - sway * 0.28, lineLength)
+  ctx.stroke()
+
+  ctx.restore()
+}
+
+function drawMastAndSails(ctx, boat) {
+  const { sailLevel } = boat
+  ctx.save()
+  ctx.translate(-4, 0)
+
+  ctx.fillStyle = '#5b3a20'
+  ctx.fillRect(-2, -26, 4, 52)
+  ctx.fillStyle = '#a06a38'
+  ctx.fillRect(-1, -26, 2, 52)
+
+  const boomLength = 28 + sailLevel * 8
+  ctx.fillStyle = '#7a4c27'
+  ctx.fillRect(-2, -3, boomLength, 6)
+
+  if (sailLevel < 0.08) {
+    const bundled = 20
+    ctx.fillStyle = '#dce3ed'
+    ctx.fillRect(-2, -6, bundled, 12)
+    ctx.strokeStyle = '#c6ccd8'
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    ctx.moveTo(-2, -4)
+    ctx.lineTo(bundled - 2, -4)
+    ctx.moveTo(-2, 4)
+    ctx.lineTo(bundled - 2, 4)
+    ctx.stroke()
+  } else {
+    const eased = sailLevel * sailLevel * (3 - 2 * sailLevel)
+    const sailReach = 18 + eased * 22
+    const footDrop = 10 + eased * 10
+    const billow = 6 + eased * 14
+
+    ctx.fillStyle = '#f1f5ff'
+    ctx.beginPath()
+    ctx.moveTo(0, -24)
+    ctx.quadraticCurveTo(-sailReach * 0.28, -24 - billow * 0.15, -sailReach, -6)
+    ctx.lineTo(-sailReach, footDrop)
+    ctx.quadraticCurveTo(-sailReach * 0.36, footDrop - billow * 0.25, 0, 12)
+    ctx.closePath()
+    ctx.fill()
+
+    ctx.strokeStyle = '#cfdcee'
+    ctx.lineWidth = 1.8
+    ctx.stroke()
+
+    ctx.strokeStyle = 'rgba(204, 222, 248, 0.7)'
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    ctx.moveTo(-sailReach * 0.78, -2)
+    ctx.quadraticCurveTo(-sailReach * 0.54, -2 + billow * 0.45, -sailReach * 0.2, footDrop - 4)
+    ctx.stroke()
+
+    ctx.globalAlpha = 0.35
+    ctx.fillStyle = '#e4ecf8'
+    ctx.beginPath()
+    ctx.moveTo(0, -20)
+    ctx.quadraticCurveTo(-sailReach * 0.4, -10, -sailReach * 0.2, 6)
+    ctx.lineTo(0, 8)
+    ctx.closePath()
+    ctx.fill()
+    ctx.globalAlpha = 1
+  }
+
+  ctx.fillStyle = '#ff5b5b'
+  ctx.beginPath()
+  ctx.moveTo(0, -26)
+  ctx.lineTo(12, -32)
+  ctx.lineTo(0, -18)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.restore()
 }
 
 function addVignette(ctx, width, height) {
