@@ -206,6 +206,7 @@ function App() {
   const [seed, setSeed] = useState(() => generateRandomSeed())
   const [seedInput, setSeedInput] = useState(seed)
   const [copyStatus, setCopyStatus] = useState('')
+  const [activeMenu, setActiveMenu] = useState(null)
   const copyTimeoutRef = useRef(null)
 
   const seedData = useMemo(() => {
@@ -456,56 +457,115 @@ function App() {
     }, 2000)
   }
 
+  const handleMenuToggle = (menuKey) => {
+    setActiveMenu((current) => (current === menuKey ? null : menuKey))
+  }
+
+  const shipStatus = useMemo(() => {
+    if (boatState.anchorState === 'dropping') {
+      return 'Dropping anchor'
+    }
+
+    if (boatState.anchorState === 'anchored') {
+      return 'At anchor'
+    }
+
+    if (boatState.anchorState === 'weighing') {
+      return 'Weighing anchor'
+    }
+
+    if (boatState.speed > 10) {
+      return 'Under way'
+    }
+
+    return 'Idle'
+  }, [boatState.anchorState, boatState.speed])
+
+  const speedKnots = Math.round(boatState.speed)
+  const headingDegrees = Math.round(
+    (((boatState.heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (180 / Math.PI),
+  )
+
   return (
     <div className="app">
       <canvas ref={canvasRef} className="world-canvas" />
       <div className="ui-layer">
-        <div className="top-menu glass-panel">
-          <div className="menu-brand">SailTrade</div>
-          <div className="menu-instructions">
-            Catch the wind with <strong>↑</strong>/<strong>W</strong>, ease the sails with <strong>↓</strong>/<strong>S</strong>, and steer using <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong>.
-          </div>
-          <form className="seed-form" onSubmit={handleSeedSubmit}>
-            <label htmlFor="seed-input" className="seed-label">
-              World Seed
-            </label>
-            <input
-              id="seed-input"
-              className="seed-input"
-              value={seedInput}
-              onChange={(event) => setSeedInput(event.target.value)}
-              placeholder="Enter or paste a seed"
-              spellCheck="false"
-            />
-            <div className="seed-buttons">
-              <button type="submit" className="seed-button">
-                Load
+        <div className={`top-menu glass-panel ${activeMenu ? 'top-menu--expanded' : ''}`}>
+          <div className="top-menu-header">
+            <div className="menu-brand">SailTrade</div>
+            <div className="menu-actions">
+              <button
+                type="button"
+                className={`menu-toggle-button ${activeMenu === 'seed' ? 'is-active' : ''}`}
+                onClick={() => handleMenuToggle('seed')}
+              >
+                World Seed
               </button>
-              <button type="button" className="seed-button" onClick={handleRandomSeed}>
-                Random
-              </button>
-              <button type="button" className="seed-button" onClick={handleCopySeed}>
-                Copy
+              <button
+                type="button"
+                className={`menu-toggle-button ${activeMenu === 'instructions' ? 'is-active' : ''}`}
+                onClick={() => handleMenuToggle('instructions')}
+              >
+                Instructions
               </button>
             </div>
-          </form>
-          <div className="seed-hint">
-            <span>Share this seed to sail the same waters.</span>
-            {copyStatus && <span className="seed-status">{copyStatus}</span>}
           </div>
+          {activeMenu === 'seed' && (
+            <div className="top-menu-content">
+              <form className="seed-form" onSubmit={handleSeedSubmit}>
+                <label htmlFor="seed-input" className="seed-label">
+                  World Seed
+                </label>
+                <input
+                  id="seed-input"
+                  className="seed-input"
+                  value={seedInput}
+                  onChange={(event) => setSeedInput(event.target.value)}
+                  placeholder="Enter or paste a seed"
+                  spellCheck="false"
+                />
+                <div className="seed-buttons">
+                  <button type="submit" className="seed-button">
+                    Load
+                  </button>
+                  <button type="button" className="seed-button" onClick={handleRandomSeed}>
+                    Random
+                  </button>
+                  <button type="button" className="seed-button" onClick={handleCopySeed}>
+                    Copy
+                  </button>
+                </div>
+              </form>
+              <div className="seed-hint">
+                <span>Share this seed to sail the same waters.</span>
+                {copyStatus && <span className="seed-status">{copyStatus}</span>}
+              </div>
+            </div>
+          )}
+          {activeMenu === 'instructions' && (
+            <div className="top-menu-content">
+              <div className="menu-instructions">
+                Catch the wind with <strong>↑</strong>/<strong>W</strong>, ease the sails with <strong>↓</strong>/<strong>S</strong>, and steer using
+                {' '}
+                <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong>.
+              </div>
+            </div>
+          )}
         </div>
         <div className="bottom-menu glass-panel">
           <div className="ship-title">Ship</div>
           <div className="ship-stats">
             <div className="ship-stat">
               <span className="ship-stat-label">Speed</span>
-              <span className="ship-stat-value">{Math.round(boatState.speed)} kn</span>
+              <span className="ship-stat-value">{speedKnots} kn</span>
             </div>
             <div className="ship-stat">
               <span className="ship-stat-label">Heading</span>
-              <span className="ship-stat-value">
-                {Math.round((((boatState.heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (180 / Math.PI))}°
-              </span>
+              <span className="ship-stat-value">{headingDegrees}°</span>
+            </div>
+            <div className="ship-stat">
+              <span className="ship-stat-label">Status</span>
+              <span className="ship-stat-value">{shipStatus}</span>
             </div>
           </div>
         </div>
