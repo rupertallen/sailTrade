@@ -37,6 +37,7 @@ const MAX_BOAT_EXTENT = BOAT_COLLISION_OUTLINE.reduce(
 
 const MINIMAP_WORLD_RADIUS = 2200
 const COLLISION_EDGE_THRESHOLD = 6
+const islandTextureCache = new WeakMap()
 
 function generateRandomSeed() {
   if (typeof crypto !== 'undefined' && crypto?.getRandomValues) {
@@ -216,7 +217,7 @@ function generateCoastlineShape(radius, random = Math.random) {
 function createInnerRing(points, scale, jitter, random = Math.random) {
   return points.map((point) => {
     const jitterAmount = 1 + (random() - 0.5) * jitter
-    const r = point.radius * scale * jitterAmount
+    const r = Math.min(point.radius * 0.995, point.radius * scale * jitterAmount)
     return {
       angle: point.angle,
       radius: r,
@@ -351,7 +352,7 @@ function generateIslands(count, random = Math.random) {
     }
 
     const coastline = generateCoastlineShape(radius, random)
-    const beach = createInnerRing(coastline, 0.9, 0.1, random)
+    const beach = createInnerRing(coastline, 0.98, 0.02, random)
     const grass = createInnerRing(coastline, 0.68, 0.16, random)
     const canopy = createInnerRing(coastline, 0.5, 0.22, random)
 
@@ -367,6 +368,13 @@ function generateIslands(count, random = Math.random) {
       grass,
       canopy,
       palette,
+      textureSeed: random() * 1000000,
+      waveAnimation: {
+        offset: random() * 400,
+        speed: 0.6 + random() * 0.8,
+        dash: 12 + random() * 10,
+        glow: 0.22 + random() * 0.25,
+      },
       cliffs: generateCliffs(random),
       treeClusters: generateTreeClusters(canopy, radius, random),
       streams: generateStreams(coastline, radius, random),
@@ -454,6 +462,7 @@ function App() {
 
   const islands = seedData.islands
   const wavesRef = useRef(seedData.waves.map((wave) => ({ ...wave })))
+  const shorelineTimeRef = useRef(0)
   useEffect(() => {
     wavesRef.current = seedData.waves.map((wave) => ({ ...wave }))
   }, [seedData.waves])
@@ -470,6 +479,7 @@ function App() {
     boatRef.current = resetState
     setBoatState(resetState)
     pressedKeys.current.clear()
+    shorelineTimeRef.current = 0
   }, [seed])
 
   useEffect(() => {
@@ -627,7 +637,15 @@ function App() {
 
       const boat = updateBoat(dt)
       updateWaves(wavesRef.current, dt)
-      drawScene(ctx, { width: canvas.width, height: canvas.height }, boat, islands, wavesRef.current)
+      shorelineTimeRef.current = (shorelineTimeRef.current + dt) % 1000
+      drawScene(
+        ctx,
+        { width: canvas.width, height: canvas.height },
+        boat,
+        islands,
+        wavesRef.current,
+        shorelineTimeRef.current,
+      )
 
       if (isMiniMapVisible) {
         const miniMapCanvasCurrent = miniMapRef.current
@@ -946,7 +964,7 @@ function updateWaves(waves, dt) {
   }
 }
 
-function drawScene(ctx, viewport, boat, islands, waves) {
+function drawScene(ctx, viewport, boat, islands, waves, shorelineTime) {
   const { width, height } = viewport
   const camera = {
     x: boat.x - width / 2,
@@ -955,7 +973,7 @@ function drawScene(ctx, viewport, boat, islands, waves) {
 
   ctx.imageSmoothingEnabled = false
   paintSea(ctx, width, height, camera, waves)
-  drawIslands(ctx, islands, camera)
+  drawIslands(ctx, islands, camera, shorelineTime)
   drawBoatWake(ctx, boat, camera)
   drawBoat(ctx, boat, camera)
   addVignette(ctx, width, height)
@@ -1119,7 +1137,7 @@ function paintSea(ctx, width, height, camera, waves) {
   ctx.restore()
 }
 
-function drawIslands(ctx, islands, camera) {
+function drawIslands(ctx, islands, camera, shorelineTime = 0) {
   for (const island of islands) {
     const screenX = island.x - camera.x
     const screenY = island.y - camera.y
@@ -1140,6 +1158,7 @@ function drawIslands(ctx, islands, camera) {
     drawWaterHalo(ctx, island, coastPath)
     drawShore(ctx, island, coastPath)
     drawBeach(ctx, island, beachPath)
+    drawShorelineWaves(ctx, island, coastPath, shorelineTime)
     drawCliffs(ctx, island, coastPath)
     drawGrass(ctx, island, grassPath)
     addMeadowHighlights(ctx, island, grassPath)
@@ -1280,6 +1299,144 @@ function buildSmoothPath(points) {
   return path
 }
 
+function getIslandTexture(ctx, island, type, config = {}) {
+  let cache = islandTextureCache.get(island)
+  if (!cache) {
+    cache = {}
+    islandTextureCache.set(island, cache)
+  }
+
+  let texture = cache[type]
+  if (!texture) {
+    const size = config.size ?? 160
+    const offscreen = document.createElement('canvas')
+    offscreen.width = size
+    offscreen.height = size
+    const textureCtx = offscreen.getContext('2d')
+
+    if (textureCtx) {
+      const rng = createSeededRng(`${island.id}-${type}-${island.textureSeed ?? 0}`)
+      const highlightColor = config.highlightColor ?? 'rgba(255, 255, 255, 0.3)'
+      const shadowColor = config.shadowColor ?? 'rgba(0, 0, 0, 0.35)'
+
+      if (config.baseColor) {
+        textureCtx.fillStyle = config.baseColor
+        textureCtx.globalAlpha = config.baseAlpha ?? 0.08
+        textureCtx.fillRect(0, 0, size, size)
+        textureCtx.globalAlpha = 1
+      }
+
+      const density = config.density ?? 0.018
+      const speckCount = Math.floor(size * size * density)
+      for (let i = 0; i < speckCount; i += 1) {
+        textureCtx.globalAlpha = (config.minAlpha ?? 0.05) + rng() * (config.maxAlpha ?? 0.22)
+        textureCtx.fillStyle = rng() < (config.highlightChance ?? 0.5) ? highlightColor : shadowColor
+        const radiusX = (config.dotSize ?? 1.4) * (0.4 + rng() * 1.8)
+        const radiusY = radiusX * (0.55 + rng() * 0.9)
+        const angle = rng() * TWO_PI
+        const x = rng() * size
+        const y = rng() * size
+        textureCtx.beginPath()
+        textureCtx.ellipse(x, y, radiusX, radiusY, angle, 0, TWO_PI)
+        textureCtx.fill()
+      }
+
+      if (config.accentColor) {
+        const accentCount = Math.floor(size * size * (config.accentDensity ?? 0.003))
+        textureCtx.strokeStyle = config.accentColor
+        textureCtx.lineWidth = config.accentWidth ?? 0.6
+        textureCtx.globalAlpha = config.accentAlpha ?? 0.14
+        for (let i = 0; i < accentCount; i += 1) {
+          const x = rng() * size
+          const y = rng() * size
+          const length = (config.accentLength ?? 12) * (0.3 + rng() * 1.2)
+          const angle = rng() * TWO_PI
+          textureCtx.beginPath()
+          textureCtx.moveTo(x, y)
+          textureCtx.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length)
+          textureCtx.stroke()
+        }
+        textureCtx.globalAlpha = 1
+      }
+
+      const offsetX = -rng() * size
+      const offsetY = -rng() * size
+      texture = {
+        offscreen,
+        pattern: null,
+        patternCanvas: null,
+        offsetX,
+        offsetY,
+      }
+    } else {
+      texture = {
+        offscreen,
+        pattern: null,
+        patternCanvas: null,
+        offsetX: 0,
+        offsetY: 0,
+      }
+    }
+
+    cache[type] = texture
+  }
+
+  if (!texture.pattern || texture.patternCanvas !== ctx.canvas) {
+    texture.pattern = ctx.createPattern(texture.offscreen, 'repeat')
+    texture.patternCanvas = ctx.canvas
+  }
+
+  return texture
+}
+
+function applyTexture(ctx, path, island, type, options = {}) {
+  const { opacity = 0.25, ...textureConfig } = options
+  const texture = getIslandTexture(ctx, island, type, textureConfig)
+  if (!texture?.pattern) {
+    return
+  }
+
+  ctx.save()
+  ctx.clip(path)
+  ctx.globalAlpha = opacity
+  ctx.translate(texture.offsetX, texture.offsetY)
+  ctx.fillStyle = texture.pattern
+  const extent = island.radius * 3
+  ctx.fillRect(-extent, -extent, extent * 2, extent * 2)
+  ctx.restore()
+}
+
+function drawShorelineWaves(ctx, island, coastPath, time) {
+  const animation = island.waveAnimation ?? { offset: 0, speed: 1, dash: 16, glow: 0.3 }
+  const dashLength = Math.max(8, animation.dash)
+  const dashGap = dashLength * 1.2
+  const travel = -((time * 60 * (animation.speed ?? 1)) + animation.offset)
+  const swayX = Math.sin(time * 1.8 + animation.offset * 0.1) * 1.1
+  const swayY = Math.cos(time * 1.4 + animation.offset * 0.08) * 0.9
+
+  ctx.save()
+  ctx.globalCompositeOperation = 'lighter'
+  ctx.setLineDash([dashLength, dashGap])
+  ctx.lineDashOffset = travel
+  ctx.lineWidth = 2.6
+  ctx.globalAlpha = 0.55 * (animation.glow ?? 0.3)
+  ctx.strokeStyle = 'rgba(220, 244, 255, 0.8)'
+  ctx.shadowBlur = 12
+  ctx.shadowColor = 'rgba(150, 210, 255, 0.45)'
+  ctx.shadowOffsetX = swayX * 0.6
+  ctx.shadowOffsetY = swayY * 0.6
+  ctx.stroke(coastPath)
+
+  ctx.shadowBlur = 0
+  ctx.setLineDash([dashLength * 1.3, dashGap * 1.15])
+  ctx.lineDashOffset = travel * 0.6
+  ctx.lineWidth = 5.4
+  ctx.globalAlpha = 0.28 * (animation.glow ?? 0.3)
+  ctx.strokeStyle = 'rgba(130, 200, 236, 0.45)'
+  ctx.stroke(coastPath)
+  ctx.restore()
+}
+
 function drawWaterHalo(ctx, island, coastPath) {
   ctx.save()
   ctx.globalCompositeOperation = 'lighter'
@@ -1297,8 +1454,19 @@ function drawShore(ctx, island, coastPath) {
   ctx.save()
   ctx.fillStyle = island.palette.shore
   ctx.fill(coastPath)
-  ctx.strokeStyle = 'rgba(32, 42, 48, 0.38)'
-  ctx.lineWidth = 3.4
+  applyTexture(ctx, coastPath, island, 'shore', {
+    opacity: 0.32,
+    baseColor: hexToRgba(island.palette.highlight, 0.18),
+    baseAlpha: 0.06,
+    highlightColor: hexToRgba('#ffffff', 0.65),
+    shadowColor: hexToRgba(island.palette.cliffs, 0.35),
+    density: 0.012,
+    dotSize: 1.6,
+    minAlpha: 0.05,
+    maxAlpha: 0.2,
+  })
+  ctx.strokeStyle = 'rgba(32, 42, 48, 0.32)'
+  ctx.lineWidth = 3.2
   ctx.stroke(coastPath)
 
   ctx.clip(coastPath)
@@ -1316,6 +1484,22 @@ function drawBeach(ctx, island, beachPath) {
   ctx.save()
   ctx.fillStyle = island.palette.beach
   ctx.fill(beachPath)
+  applyTexture(ctx, beachPath, island, 'beach', {
+    opacity: 0.34,
+    baseColor: hexToRgba(island.palette.shore, 0.2),
+    baseAlpha: 0.05,
+    highlightColor: hexToRgba('#ffffff', 0.7),
+    shadowColor: hexToRgba(island.palette.cliffs, 0.28),
+    density: 0.02,
+    dotSize: 1.2,
+    minAlpha: 0.06,
+    maxAlpha: 0.22,
+    accentColor: hexToRgba(island.palette.highlight, 0.55),
+    accentDensity: 0.0014,
+    accentWidth: 0.55,
+    accentAlpha: 0.1,
+    accentLength: 6,
+  })
 
   ctx.clip(beachPath)
   const warmth = ctx.createLinearGradient(-island.radius, -island.radius, island.radius, island.radius)
@@ -1326,14 +1510,6 @@ function drawBeach(ctx, island, beachPath) {
   ctx.fillStyle = warmth
   ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
 
-  ctx.globalAlpha = 0.24
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'
-  for (let y = -island.radius; y <= island.radius; y += 16) {
-    ctx.beginPath()
-    ctx.moveTo(-island.radius, y)
-    ctx.lineTo(island.radius, y + island.radius * 0.12)
-    ctx.stroke()
-  }
   ctx.restore()
 }
 
@@ -1341,6 +1517,22 @@ function drawGrass(ctx, island, grassPath) {
   ctx.save()
   ctx.fillStyle = island.palette.grass
   ctx.fill(grassPath)
+  applyTexture(ctx, grassPath, island, 'grass', {
+    opacity: 0.26,
+    baseColor: hexToRgba(island.palette.highlight, 0.2),
+    baseAlpha: 0.04,
+    highlightColor: hexToRgba(island.palette.highlight, 0.75),
+    shadowColor: 'rgba(10, 64, 36, 0.6)',
+    density: 0.024,
+    dotSize: 1.9,
+    minAlpha: 0.05,
+    maxAlpha: 0.18,
+    accentColor: 'rgba(255, 255, 255, 0.28)',
+    accentDensity: 0.0012,
+    accentWidth: 0.6,
+    accentAlpha: 0.12,
+    accentLength: 10,
+  })
 
   ctx.clip(grassPath)
   const gradient = ctx.createRadialGradient(0, 0, island.radius * 0.22, 0, 0, island.radius * 0.92)
@@ -1402,6 +1594,22 @@ function drawCanopyBase(ctx, island, canopyPath) {
   ctx.save()
   ctx.fillStyle = hexToRgba(island.palette.canopy, 0.92)
   ctx.fill(canopyPath)
+  applyTexture(ctx, canopyPath, island, 'canopy', {
+    opacity: 0.22,
+    baseColor: hexToRgba(island.palette.highlight, 0.25),
+    baseAlpha: 0.05,
+    highlightColor: hexToRgba(island.palette.highlight, 0.82),
+    shadowColor: 'rgba(6, 38, 24, 0.7)',
+    density: 0.028,
+    dotSize: 1.5,
+    minAlpha: 0.05,
+    maxAlpha: 0.16,
+    accentColor: 'rgba(12, 60, 32, 0.55)',
+    accentDensity: 0.0018,
+    accentWidth: 0.8,
+    accentAlpha: 0.16,
+    accentLength: 9,
+  })
 
   ctx.clip(canopyPath)
   const depth = ctx.createRadialGradient(0, 0, island.radius * 0.14, 0, 0, island.radius * 0.6)
@@ -1752,8 +1960,8 @@ function drawAnchor(ctx, boat) {
   }
 
   const eased = progress * progress * (3 - 2 * progress)
-  const lineLength = 26 + eased * 46
-  const lateralLean = 6 + eased * 18
+  const lineLength = (26 + eased * 46) * 0.5
+  const lateralLean = (6 + eased * 18) * 0.5
   const sway = Math.sin(boat.wakeTimer * 1.4) * (1 + eased * 2)
 
   ctx.save()
