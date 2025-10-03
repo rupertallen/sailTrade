@@ -459,21 +459,16 @@ function App() {
   return (
     <div className="app">
       <canvas ref={canvasRef} className="world-canvas" />
-      <div className="overlay">
-        <div className="title">SailTrade</div>
-        <div className="stats">
-          <span>Speed: {Math.round(boatState.speed)} kn</span>
-          <span>
-            Heading: {Math.round((((boatState.heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (180 / Math.PI))}
-            °
-          </span>
-        </div>
-        <div className="instructions">
-          Press <strong>↑</strong>/<strong>W</strong> to catch more wind, <strong>↓</strong>/<strong>S</strong> to trim your sails, and use <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong> to turn the bow.
-        </div>
-        <form className="seed-form" onSubmit={handleSeedSubmit}>
-          <label htmlFor="seed-input">World seed</label>
-          <div className="seed-actions">
+      <div className="ui-layer">
+        <div className="top-menu glass-panel">
+          <div className="menu-brand">SailTrade</div>
+          <div className="menu-instructions">
+            Catch the wind with <strong>↑</strong>/<strong>W</strong>, ease the sails with <strong>↓</strong>/<strong>S</strong>, and steer using <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong>.
+          </div>
+          <form className="seed-form" onSubmit={handleSeedSubmit}>
+            <label htmlFor="seed-input" className="seed-label">
+              World Seed
+            </label>
             <input
               id="seed-input"
               className="seed-input"
@@ -482,21 +477,38 @@ function App() {
               placeholder="Enter or paste a seed"
               spellCheck="false"
             />
-            <button type="submit" className="seed-button">
-              Load
-            </button>
-            <button type="button" className="seed-button" onClick={handleRandomSeed}>
-              Random
-            </button>
-            <button type="button" className="seed-button" onClick={handleCopySeed}>
-              Copy
-            </button>
-          </div>
-          <div className="seed-footer">
-            <span className="seed-hint">Share this seed to sail the same waters.</span>
+            <div className="seed-buttons">
+              <button type="submit" className="seed-button">
+                Load
+              </button>
+              <button type="button" className="seed-button" onClick={handleRandomSeed}>
+                Random
+              </button>
+              <button type="button" className="seed-button" onClick={handleCopySeed}>
+                Copy
+              </button>
+            </div>
+          </form>
+          <div className="seed-hint">
+            <span>Share this seed to sail the same waters.</span>
             {copyStatus && <span className="seed-status">{copyStatus}</span>}
           </div>
-        </form>
+        </div>
+        <div className="bottom-menu glass-panel">
+          <div className="ship-title">Ship</div>
+          <div className="ship-stats">
+            <div className="ship-stat">
+              <span className="ship-stat-label">Speed</span>
+              <span className="ship-stat-value">{Math.round(boatState.speed)} kn</span>
+            </div>
+            <div className="ship-stat">
+              <span className="ship-stat-label">Heading</span>
+              <span className="ship-stat-value">
+                {Math.round((((boatState.heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (180 / Math.PI))}°
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -547,9 +559,9 @@ function drawScene(ctx, viewport, boat, islands, waves) {
 
 function paintSea(ctx, width, height, camera, waves) {
   const gradient = ctx.createLinearGradient(0, 0, width, height)
-  gradient.addColorStop(0, '#102a4d')
-  gradient.addColorStop(0.5, '#114b73')
-  gradient.addColorStop(1, '#0a243b')
+  gradient.addColorStop(0, '#2bb9c6')
+  gradient.addColorStop(0.55, '#1f9fb3')
+  gradient.addColorStop(1, '#0b4969')
   ctx.fillStyle = gradient
   ctx.fillRect(0, 0, width, height)
 
