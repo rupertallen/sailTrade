@@ -664,19 +664,47 @@ function drawBoatWake(ctx, boat, camera) {
 
   const sprayStrength = Math.min(boat.speed / (MAX_FORWARD_SPEED * 0.7), 1)
   if (sprayStrength > 0.05) {
-    ctx.globalAlpha = 0.42 * sprayStrength
-    ctx.fillStyle = 'rgba(235, 250, 255, 0.9)'
-    const oscillation = Math.sin(boat.wakeTimer * 6)
+    const eased = sprayStrength * sprayStrength * (3 - 2 * sprayStrength)
+
     for (const side of [-1, 1]) {
-      ctx.save()
-      ctx.translate(46, side * (18 + oscillation * 2))
-      ctx.rotate(side * 0.28)
-      ctx.scale(1, 0.78)
+      ctx.globalAlpha = 0.26 * sprayStrength
+      ctx.fillStyle = 'rgba(214, 242, 255, 0.88)'
       ctx.beginPath()
-      ctx.ellipse(0, 0, 14 + sprayStrength * 9, 5 + sprayStrength * 3.8, 0, 0, Math.PI * 2)
+      ctx.moveTo(48, side * 4)
+      ctx.quadraticCurveTo(40, side * (10 + eased * 8), 24, side * (16 + eased * 12))
+      ctx.lineTo(20, side * (12 + eased * 8))
+      ctx.quadraticCurveTo(36, side * (6 + eased * 6), 48, side * 2)
+      ctx.closePath()
       ctx.fill()
-      ctx.restore()
+
+      ctx.globalAlpha = 0.42 * sprayStrength
+      ctx.strokeStyle = 'rgba(235, 252, 255, 0.95)'
+      ctx.lineWidth = 1.5 + eased * 1.2
+
+      for (let i = 0; i < 3; i += 1) {
+        const flow = i / 2.4
+        const startX = 50 - flow * 5.5
+        const startY = side * (3 + flow * 2.6)
+        const midX = 40 - eased * (8 + flow * 6)
+        const midY = side * (8 + eased * 10 + flow * 5.5)
+        const endX = 26 - eased * (11 + flow * 5.5)
+        const endY = side * (15 + eased * 14 + flow * 5.5)
+        ctx.beginPath()
+        ctx.moveTo(startX, startY)
+        ctx.quadraticCurveTo(midX, midY, endX, endY)
+        ctx.stroke()
+      }
     }
+
+    ctx.globalAlpha = 0.3 * sprayStrength
+    ctx.strokeStyle = 'rgba(190, 226, 244, 0.8)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(44, 0)
+    ctx.quadraticCurveTo(32, 0, 18, 0)
+    ctx.stroke()
+
+    ctx.globalAlpha = 1
   }
 
   ctx.restore()
@@ -877,41 +905,41 @@ function drawAnchor(ctx, boat) {
     return
   }
 
-  let depth = 0
+  let progress = 0
   if (boat.anchorState === 'dropping') {
-    depth = boat.anchorProgress * 48
+    progress = boat.anchorProgress
   } else if (boat.anchorState === 'anchored') {
-    depth = 48
+    progress = 1
   } else if (boat.anchorState === 'weighing') {
-    depth = (1 - boat.anchorProgress) * 48
+    progress = 1 - boat.anchorProgress
   }
 
+  const eased = progress * progress * (3 - 2 * progress)
+  const lineLength = 26 + eased * 46
+  const lateralLean = 6 + eased * 18
+  const sway = Math.sin(boat.wakeTimer * 1.4) * (1 + eased * 2)
+
   ctx.save()
-  ctx.translate(-20, 18)
+  ctx.translate(-22, 16)
 
   ctx.fillStyle = '#b48b56'
   ctx.beginPath()
-  ctx.arc(0, 0, 6, 0, Math.PI * 2)
+  ctx.arc(0, 0, 5.5, 0, Math.PI * 2)
   ctx.fill()
 
-  ctx.strokeStyle = 'rgba(240, 228, 198, 0.95)'
+  ctx.strokeStyle = 'rgba(240, 228, 198, 0.9)'
   ctx.lineWidth = 2
   ctx.beginPath()
   ctx.moveTo(0, 0)
-  ctx.lineTo(0, depth)
+  ctx.quadraticCurveTo(-lateralLean * 0.45 - sway, lineLength * 0.55, -lateralLean - sway * 0.3, lineLength)
   ctx.stroke()
 
-  if (depth > 0.5) {
-    ctx.fillStyle = '#4b5a68'
-    ctx.beginPath()
-    ctx.moveTo(0, depth)
-    ctx.lineTo(-10, depth + 14)
-    ctx.quadraticCurveTo(0, depth + 22, 10, depth + 14)
-    ctx.closePath()
-    ctx.fill()
-
-    ctx.fillRect(-8, depth - 2, 16, 4)
-  }
+  ctx.strokeStyle = 'rgba(172, 146, 110, 0.35)'
+  ctx.lineWidth = 3.2
+  ctx.beginPath()
+  ctx.moveTo(-2, 0)
+  ctx.quadraticCurveTo(-lateralLean * 0.5 - sway, lineLength * 0.52, -lateralLean - sway * 0.28, lineLength)
+  ctx.stroke()
 
   ctx.restore()
 }
@@ -922,71 +950,68 @@ function drawMastAndSails(ctx, boat) {
   ctx.translate(-4, 0)
 
   ctx.fillStyle = '#5b3a20'
-  ctx.fillRect(-2, -24, 4, 48)
+  ctx.fillRect(-2, -26, 4, 52)
   ctx.fillStyle = '#a06a38'
-  ctx.fillRect(-1, -24, 2, 48)
+  ctx.fillRect(-1, -26, 2, 52)
 
-  const boomLength = 30 + sailLevel * 44
+  const boomLength = 28 + sailLevel * 8
   ctx.fillStyle = '#7a4c27'
   ctx.fillRect(-2, -3, boomLength, 6)
 
-  if (sailLevel < 0.1) {
-    ctx.fillStyle = '#d8dfe8'
-    ctx.fillRect(0, -6, boomLength - 4, 12)
-    ctx.strokeStyle = '#f4f7ff'
-    ctx.lineWidth = 1.4
+  if (sailLevel < 0.08) {
+    const bundled = 20
+    ctx.fillStyle = '#dce3ed'
+    ctx.fillRect(-2, -6, bundled, 12)
+    ctx.strokeStyle = '#c6ccd8'
+    ctx.lineWidth = 1.2
     ctx.beginPath()
-    ctx.moveTo(0, -4)
-    ctx.lineTo(boomLength - 4, -4)
-    ctx.moveTo(0, 4)
-    ctx.lineTo(boomLength - 4, 4)
+    ctx.moveTo(-2, -4)
+    ctx.lineTo(bundled - 2, -4)
+    ctx.moveTo(-2, 4)
+    ctx.lineTo(bundled - 2, 4)
     ctx.stroke()
   } else {
-    const sailReach = 46 + sailLevel * 44
-    const sailSpread = 12 + sailLevel * 26
-    const sailCurve = 8 + sailLevel * 18
+    const eased = sailLevel * sailLevel * (3 - 2 * sailLevel)
+    const sailReach = 18 + eased * 22
+    const footDrop = 10 + eased * 10
+    const billow = 6 + eased * 14
 
-    ctx.fillStyle = '#f1f6ff'
+    ctx.fillStyle = '#f1f5ff'
     ctx.beginPath()
-    ctx.moveTo(0, 0)
-    ctx.quadraticCurveTo(sailReach * 0.38, -sailSpread - sailCurve, sailReach, -sailSpread * 0.6)
-    ctx.lineTo(sailReach, sailSpread * 0.6)
-    ctx.quadraticCurveTo(sailReach * 0.38, sailSpread + sailCurve, 0, 0)
+    ctx.moveTo(0, -24)
+    ctx.quadraticCurveTo(-sailReach * 0.28, -24 - billow * 0.15, -sailReach, -6)
+    ctx.lineTo(-sailReach, footDrop)
+    ctx.quadraticCurveTo(-sailReach * 0.36, footDrop - billow * 0.25, 0, 12)
     ctx.closePath()
     ctx.fill()
 
-    ctx.strokeStyle = '#d1e0f7'
-    ctx.lineWidth = 2
+    ctx.strokeStyle = '#cfdcee'
+    ctx.lineWidth = 1.8
     ctx.stroke()
 
-    ctx.fillStyle = 'rgba(204, 222, 248, 0.7)'
+    ctx.strokeStyle = 'rgba(204, 222, 248, 0.7)'
+    ctx.lineWidth = 1.2
     ctx.beginPath()
-    ctx.moveTo(0, 0)
-    ctx.quadraticCurveTo(sailReach * 0.55, 0, sailReach * 0.82, sailSpread * 0.3)
-    ctx.lineTo(sailReach * 0.5, 0)
-    ctx.closePath()
-    ctx.fill()
-
-    const jibReach = 32 + sailLevel * 30
-    const jibOffset = 10 + sailLevel * 14
-    ctx.fillStyle = '#e3ecfb'
-    ctx.beginPath()
-    ctx.moveTo(10, -2)
-    ctx.lineTo(jibReach + 6, -jibOffset * 0.45)
-    ctx.lineTo(10, jibOffset)
-    ctx.closePath()
-    ctx.fill()
-
-    ctx.strokeStyle = '#c7d6ee'
-    ctx.lineWidth = 1.5
+    ctx.moveTo(-sailReach * 0.78, -2)
+    ctx.quadraticCurveTo(-sailReach * 0.54, -2 + billow * 0.45, -sailReach * 0.2, footDrop - 4)
     ctx.stroke()
+
+    ctx.globalAlpha = 0.35
+    ctx.fillStyle = '#e4ecf8'
+    ctx.beginPath()
+    ctx.moveTo(0, -20)
+    ctx.quadraticCurveTo(-sailReach * 0.4, -10, -sailReach * 0.2, 6)
+    ctx.lineTo(0, 8)
+    ctx.closePath()
+    ctx.fill()
+    ctx.globalAlpha = 1
   }
 
   ctx.fillStyle = '#ff5b5b'
   ctx.beginPath()
-  ctx.moveTo(0, -24)
-  ctx.lineTo(12, -30)
-  ctx.lineTo(0, -16)
+  ctx.moveTo(0, -26)
+  ctx.lineTo(12, -32)
+  ctx.lineTo(0, -18)
   ctx.closePath()
   ctx.fill()
 
