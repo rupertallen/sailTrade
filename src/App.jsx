@@ -17,6 +17,27 @@ const controlKeys = {
   right: ['d', 'arrowright'],
 }
 
+const BOAT_COLLISION_OUTLINE = [
+  { x: 58, y: 0 },
+  { x: 44, y: 18 },
+  { x: 44, y: -18 },
+  { x: 20, y: 26 },
+  { x: 20, y: -26 },
+  { x: -8, y: 30 },
+  { x: -8, y: -30 },
+  { x: -38, y: 18 },
+  { x: -38, y: -18 },
+  { x: -52, y: 0 },
+]
+
+const MAX_BOAT_EXTENT = BOAT_COLLISION_OUTLINE.reduce(
+  (max, point) => Math.max(max, Math.hypot(point.x, point.y)),
+  0,
+)
+
+const MINIMAP_WORLD_RADIUS = 2200
+const COLLISION_EDGE_THRESHOLD = 6
+
 function generateRandomSeed() {
   if (typeof crypto !== 'undefined' && crypto?.getRandomValues) {
     const array = crypto.getRandomValues(new Uint32Array(2))
@@ -226,20 +247,23 @@ function generateTreeClusters(canopyPoints, radius, random = Math.random) {
 
   for (let i = 0; i < clusterCount; i += 1) {
     const anchor = canopyPoints[Math.floor(random() * canopyPoints.length)]
-    const clusterRadius = radius * (0.08 + random() * 0.12)
-    const blobCount = 8 + Math.floor(random() * 12)
-    const blobs = []
+    const clusterRadius = radius * (0.09 + random() * 0.14)
+    const treeCount = 10 + Math.floor(random() * 18)
+    const trees = []
 
-    for (let j = 0; j < blobCount; j += 1) {
+    for (let j = 0; j < treeCount; j += 1) {
       const angle = random() * TWO_PI
       const distance = Math.sqrt(random()) * clusterRadius
       const x = anchor.x + Math.cos(angle) * distance
       const y = anchor.y + Math.sin(angle) * distance
-      const size = radius * (0.016 + random() * 0.032)
-      blobs.push({ x, y, size })
+      const size = radius * (0.024 + random() * 0.045)
+      const type = random() < 0.45 ? 'conifer' : 'broadleaf'
+      const lean = (random() - 0.5) * 0.6
+      const layers = type === 'conifer' ? 3 + Math.floor(random() * 3) : 2 + Math.floor(random() * 2)
+      trees.push({ x, y, size, type, lean, layers })
     }
 
-    clusters.push({ blobs })
+    clusters.push({ trees })
   }
 
   return clusters
@@ -327,9 +351,9 @@ function generateIslands(count, random = Math.random) {
     }
 
     const coastline = generateCoastlineShape(radius, random)
-    const beach = createInnerRing(coastline, 0.8, 0.16, random)
-    const grass = createInnerRing(coastline, 0.6, 0.18, random)
-    const canopy = createInnerRing(coastline, 0.46, 0.2, random)
+    const beach = createInnerRing(coastline, 0.9, 0.1, random)
+    const grass = createInnerRing(coastline, 0.68, 0.16, random)
+    const canopy = createInnerRing(coastline, 0.5, 0.22, random)
 
     const palette = pickPalette(random)
     islands.push({
@@ -411,11 +435,13 @@ function useWindowSize() {
 
 function App() {
   const canvasRef = useRef(null)
+  const miniMapRef = useRef(null)
   const pressedKeys = useRef(new Set())
   const [seed, setSeed] = useState(() => generateRandomSeed())
   const [seedInput, setSeedInput] = useState(seed)
   const [copyStatus, setCopyStatus] = useState('')
   const [activeMenu, setActiveMenu] = useState(null)
+  const [isMiniMapVisible, setMiniMapVisible] = useState(false)
   const copyTimeoutRef = useRef(null)
 
   const seedData = useMemo(() => {
@@ -576,7 +602,8 @@ function App() {
       const proposedX = current.x + Math.cos(current.heading) * current.speed * dt
       const proposedY = current.y + Math.sin(current.heading) * current.speed * dt
 
-      const collision = detectCollision(proposedX, proposedY, islands)
+      const proposedBoat = { x: proposedX, y: proposedY, heading: current.heading }
+      const collision = detectCollision(proposedBoat, islands)
       if (!collision) {
         current.x = clamp(proposedX, 0, MAP_SIZE)
         current.y = clamp(proposedY, 0, MAP_SIZE)
@@ -602,6 +629,16 @@ function App() {
       updateWaves(wavesRef.current, dt)
       drawScene(ctx, { width: canvas.width, height: canvas.height }, boat, islands, wavesRef.current)
 
+      if (isMiniMapVisible) {
+        const miniMapCanvasCurrent = miniMapRef.current
+        if (miniMapCanvasCurrent) {
+          const miniMapCtx = miniMapCanvasCurrent.getContext('2d')
+          if (miniMapCtx) {
+            drawMiniMap(miniMapCtx, boat, islands)
+          }
+        }
+      }
+
       animationFrame = requestAnimationFrame(render)
     }
 
@@ -621,7 +658,22 @@ function App() {
     return () => {
       cancelAnimationFrame(animationFrame)
     }
-  }, [height, width, islands])
+  }, [height, width, islands, isMiniMapVisible])
+
+  useEffect(() => {
+    const miniMapCanvas = miniMapRef.current
+    if (!miniMapCanvas) {
+      return
+    }
+
+    const baseSize = Math.min(260, Math.max(200, Math.min(width, height) * 0.22))
+    const size = Math.round(baseSize)
+    const dpr = window.devicePixelRatio || 1
+    miniMapCanvas.width = size * dpr
+    miniMapCanvas.height = size * dpr
+    miniMapCanvas.style.width = `${size}px`
+    miniMapCanvas.style.height = `${size}px`
+  }, [width, height])
 
   const handleSeedSubmit = (event) => {
     event.preventDefault()
@@ -717,6 +769,13 @@ function App() {
               >
                 Instructions
               </button>
+              <button
+                type="button"
+                className={`menu-toggle-button ${isMiniMapVisible ? 'is-active' : ''}`}
+                onClick={() => setMiniMapVisible((value) => !value)}
+              >
+                Mini Map
+              </button>
             </div>
           </div>
           {activeMenu === 'seed' && (
@@ -778,6 +837,9 @@ function App() {
             </div>
           </div>
         </div>
+        <div className={`mini-map-wrapper ${isMiniMapVisible ? 'is-visible' : ''}`}>
+          <canvas ref={miniMapRef} className="mini-map-canvas" />
+        </div>
       </div>
     </div>
   )
@@ -791,13 +853,86 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value))
 }
 
-function detectCollision(x, y, islands) {
-  return islands.some((island) => {
-    const dx = x - island.x
-    const dy = y - island.y
-    const limit = island.radius * 0.82
-    return dx * dx + dy * dy < limit * limit
-  })
+function getBoatCollisionSamples(boat) {
+  const samples = [{ x: boat.x, y: boat.y }]
+  const cos = Math.cos(boat.heading)
+  const sin = Math.sin(boat.heading)
+
+  for (const offset of BOAT_COLLISION_OUTLINE) {
+    const rotatedX = boat.x + offset.x * cos - offset.y * sin
+    const rotatedY = boat.y + offset.x * sin + offset.y * cos
+    samples.push({ x: rotatedX, y: rotatedY })
+  }
+
+  return samples
+}
+
+function isPointInsidePolygon(point, polygon) {
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const xi = polygon[i].x
+    const yi = polygon[i].y
+    const xj = polygon[j].x
+    const yj = polygon[j].y
+
+    const intersects =
+      yi > point.y !== yj > point.y &&
+      point.x < ((xj - xi) * (point.y - yi)) / ((yj - yi) || 1e-7) + xi
+
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function isPointNearPolygonEdge(point, polygon, threshold) {
+  const thresholdSq = threshold * threshold
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const a = polygon[j]
+    const b = polygon[i]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const lengthSq = dx * dx + dy * dy
+    let t = 0
+    if (lengthSq > 0) {
+      t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq
+      t = Math.max(0, Math.min(1, t))
+    }
+    const closestX = a.x + dx * t
+    const closestY = a.y + dy * t
+    const distSq = (point.x - closestX) * (point.x - closestX) + (point.y - closestY) * (point.y - closestY)
+    if (distSq <= thresholdSq) {
+      return true
+    }
+  }
+  return false
+}
+
+function detectCollision(boat, islands) {
+  const samples = getBoatCollisionSamples(boat)
+
+  for (const island of islands) {
+    const dx = boat.x - island.x
+    const dy = boat.y - island.y
+    const limit = island.radius + MAX_BOAT_EXTENT
+
+    if (dx * dx + dy * dy > limit * limit) {
+      continue
+    }
+
+    for (const sample of samples) {
+      const localPoint = { x: sample.x - island.x, y: sample.y - island.y }
+      if (
+        isPointInsidePolygon(localPoint, island.coastline) ||
+        isPointNearPolygonEdge(localPoint, island.coastline, COLLISION_EDGE_THRESHOLD)
+      ) {
+        return true
+      }
+    }
+  }
+
+  return false
 }
 
 function updateWaves(waves, dt) {
@@ -824,6 +959,132 @@ function drawScene(ctx, viewport, boat, islands, waves) {
   drawBoatWake(ctx, boat, camera)
   drawBoat(ctx, boat, camera)
   addVignette(ctx, width, height)
+}
+
+function drawMiniMap(ctx, boat, islands) {
+  const dpr = window.devicePixelRatio || 1
+  ctx.save()
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+  const width = ctx.canvas.width / dpr
+  const height = ctx.canvas.height / dpr
+  ctx.clearRect(0, 0, width, height)
+
+  const centerX = width / 2
+  const centerY = height / 2
+  const mapRadius = Math.max(40, Math.min(centerX, centerY) - 12)
+  const outerRadius = mapRadius + 4
+  const scale = mapRadius / MINIMAP_WORLD_RADIUS
+
+  ctx.fillStyle = 'rgba(4, 28, 42, 0.78)'
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, outerRadius, 0, TWO_PI)
+  ctx.fillStyle = 'rgba(6, 44, 60, 0.92)'
+  ctx.fill()
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, mapRadius, 0, TWO_PI)
+  ctx.clip()
+
+  ctx.fillStyle = 'rgba(13, 82, 112, 0.9)'
+  ctx.fillRect(centerX - mapRadius, centerY - mapRadius, mapRadius * 2, mapRadius * 2)
+
+  const traceRing = (points) => {
+    if (!points?.length) {
+      return false
+    }
+    ctx.beginPath()
+    const first = points[0]
+    ctx.moveTo(first.x * scale, first.y * scale)
+    for (let i = 1; i < points.length; i += 1) {
+      const point = points[i]
+      ctx.lineTo(point.x * scale, point.y * scale)
+    }
+    ctx.closePath()
+    return true
+  }
+
+  for (const island of islands) {
+    const dx = island.x - boat.x
+    const dy = island.y - boat.y
+    const distance = Math.hypot(dx, dy) - island.radius
+    if (distance > MINIMAP_WORLD_RADIUS) {
+      continue
+    }
+
+    ctx.save()
+    ctx.translate(centerX + dx * scale, centerY + dy * scale)
+
+    if (traceRing(island.coastline)) {
+      ctx.globalAlpha = 0.9
+      ctx.fillStyle = hexToRgba(island.palette.shore, 0.82)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.beach)) {
+      ctx.globalAlpha = 0.95
+      ctx.fillStyle = hexToRgba(island.palette.beach, 0.95)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.grass)) {
+      ctx.globalAlpha = 0.9
+      ctx.fillStyle = hexToRgba(island.palette.grass, 0.92)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.canopy)) {
+      ctx.globalAlpha = 0.85
+      ctx.fillStyle = hexToRgba(island.palette.canopy, 0.88)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.coastline)) {
+      ctx.strokeStyle = hexToRgba(island.palette.shore, 0.8)
+      ctx.lineWidth = Math.max(1, scale * 2.2)
+      ctx.stroke()
+    }
+
+    ctx.restore()
+  }
+
+  ctx.restore()
+
+  ctx.strokeStyle = 'rgba(224, 244, 255, 0.85)'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, mapRadius, 0, TWO_PI)
+  ctx.stroke()
+
+  ctx.strokeStyle = 'rgba(2, 12, 20, 0.88)'
+  ctx.lineWidth = 4
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, outerRadius, 0, TWO_PI)
+  ctx.stroke()
+
+  ctx.save()
+  ctx.translate(centerX, centerY)
+  ctx.rotate(boat.heading)
+  ctx.fillStyle = '#ffe8a6'
+  ctx.beginPath()
+  ctx.moveTo(mapRadius * 0.32, 0)
+  ctx.lineTo(-mapRadius * 0.2, mapRadius * 0.16)
+  ctx.lineTo(-mapRadius * 0.2, -mapRadius * 0.16)
+  ctx.closePath()
+  ctx.fill()
+  ctx.strokeStyle = 'rgba(12, 30, 42, 0.85)'
+  ctx.lineWidth = 1.8
+  ctx.stroke()
+  ctx.restore()
+
+  ctx.restore()
 }
 
 function paintSea(ctx, width, height, camera, waves) {
@@ -1152,6 +1413,150 @@ function drawCanopyBase(ctx, island, canopyPath) {
   ctx.restore()
 }
 
+function drawBroadleafTree(ctx, tree, palette) {
+  const canopyWidth = tree.size * 2.8
+  const canopyHeight = tree.size * 2.1
+  const trunkHeight = tree.size * 1.25
+  const trunkWidth = tree.size * 0.5
+
+  ctx.save()
+  ctx.translate(tree.x, tree.y)
+  ctx.rotate(tree.lean * 0.18)
+
+  ctx.save()
+  ctx.translate(tree.size * 0.28, canopyHeight * 0.6)
+  ctx.fillStyle = 'rgba(15, 42, 28, 0.32)'
+  ctx.beginPath()
+  ctx.ellipse(0, 0, canopyWidth * 0.52, canopyHeight * 0.3, 0, 0, TWO_PI)
+  ctx.fill()
+  ctx.restore()
+
+  const trunkGradient = ctx.createLinearGradient(0, canopyHeight * 0.1, 0, canopyHeight * 0.1 + trunkHeight)
+  trunkGradient.addColorStop(0, hexToRgba(palette.cliffs, 0.85))
+  trunkGradient.addColorStop(1, 'rgba(44, 26, 16, 0.9)')
+  ctx.fillStyle = trunkGradient
+  ctx.beginPath()
+  ctx.moveTo(-trunkWidth / 2, canopyHeight * 0.1)
+  ctx.lineTo(-trunkWidth / 2, canopyHeight * 0.1 + trunkHeight)
+  ctx.quadraticCurveTo(0, canopyHeight * 0.1 + trunkHeight + tree.size * 0.35, trunkWidth / 2, canopyHeight * 0.1 + trunkHeight)
+  ctx.lineTo(trunkWidth / 2, canopyHeight * 0.1)
+  ctx.closePath()
+  ctx.fill()
+
+  const canopyGradient = ctx.createRadialGradient(
+    -canopyWidth * 0.3,
+    -canopyHeight * 0.8,
+    tree.size * 0.35,
+    0,
+    0,
+    canopyWidth,
+  )
+  canopyGradient.addColorStop(0, hexToRgba(palette.highlight, 0.95))
+  canopyGradient.addColorStop(0.5, hexToRgba(palette.canopy, 0.98))
+  canopyGradient.addColorStop(1, 'rgba(14, 48, 30, 0.95)')
+  ctx.fillStyle = canopyGradient
+  ctx.beginPath()
+  ctx.moveTo(0, -canopyHeight)
+  ctx.bezierCurveTo(
+    canopyWidth * 0.5,
+    -canopyHeight * 0.65,
+    canopyWidth * 0.7,
+    canopyHeight * 0.05,
+    canopyWidth * 0.2,
+    canopyHeight * 0.65,
+  )
+  ctx.bezierCurveTo(
+    canopyWidth * 0.05,
+    canopyHeight * 0.85,
+    -canopyWidth * 0.05,
+    canopyHeight * 0.85,
+    -canopyWidth * 0.2,
+    canopyHeight * 0.65,
+  )
+  ctx.bezierCurveTo(
+    -canopyWidth * 0.7,
+    canopyHeight * 0.05,
+    -canopyWidth * 0.5,
+    -canopyHeight * 0.65,
+    0,
+    -canopyHeight,
+  )
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.globalAlpha = 0.45
+  ctx.strokeStyle = hexToRgba(palette.highlight, 0.4)
+  ctx.lineWidth = tree.size * 0.18
+  ctx.beginPath()
+  ctx.moveTo(-canopyWidth * 0.18, -canopyHeight * 0.35)
+  ctx.quadraticCurveTo(0, -canopyHeight * 0.7, canopyWidth * 0.22, -canopyHeight * 0.15)
+  ctx.stroke()
+  ctx.globalAlpha = 1
+
+  ctx.restore()
+}
+
+function drawConiferTree(ctx, tree, palette) {
+  const height = tree.size * 3.6
+  const baseWidth = tree.size * 1.65
+
+  ctx.save()
+  ctx.translate(tree.x, tree.y)
+  ctx.rotate(tree.lean * 0.15)
+
+  ctx.save()
+  ctx.translate(tree.size * 0.12, tree.size * 1.05)
+  ctx.fillStyle = 'rgba(15, 42, 28, 0.28)'
+  ctx.beginPath()
+  ctx.ellipse(0, 0, baseWidth * 0.85, tree.size * 0.55, 0, 0, TWO_PI)
+  ctx.fill()
+  ctx.restore()
+
+  const trunkHeight = tree.size * 1.1
+  const trunkWidth = tree.size * 0.35
+  const trunkGradient = ctx.createLinearGradient(0, height * 0.25, 0, height * 0.25 + trunkHeight)
+  trunkGradient.addColorStop(0, hexToRgba(palette.cliffs, 0.75))
+  trunkGradient.addColorStop(1, 'rgba(40, 22, 12, 0.92)')
+  ctx.fillStyle = trunkGradient
+  ctx.beginPath()
+  ctx.moveTo(-trunkWidth / 2, height * 0.25)
+  ctx.lineTo(-trunkWidth / 2, height * 0.25 + trunkHeight)
+  ctx.lineTo(trunkWidth / 2, height * 0.25 + trunkHeight)
+  ctx.lineTo(trunkWidth / 2, height * 0.25)
+  ctx.closePath()
+  ctx.fill()
+
+  const layers = tree.layers ?? 4
+  for (let i = 0; i < layers; i += 1) {
+    const t = layers === 1 ? 0 : i / (layers - 1)
+    const layerHeight = height * (0.12 + (1 - t) * 0.24)
+    const y = -height * 0.42 + t * height * 0.72
+    const width = baseWidth * (1 - t * 0.5)
+    const gradient = ctx.createLinearGradient(0, y - layerHeight, 0, y + layerHeight)
+    gradient.addColorStop(0, hexToRgba(palette.highlight, 0.85))
+    gradient.addColorStop(0.55, hexToRgba(palette.canopy, 0.95))
+    gradient.addColorStop(1, 'rgba(10, 48, 30, 0.95)')
+    ctx.fillStyle = gradient
+    ctx.beginPath()
+    ctx.moveTo(0, y - layerHeight)
+    ctx.bezierCurveTo(width * 0.52, y - layerHeight * 0.05, width * 0.5, y + layerHeight * 0.45, 0, y + layerHeight)
+    ctx.bezierCurveTo(-width * 0.5, y + layerHeight * 0.45, -width * 0.52, y - layerHeight * 0.05, 0, y - layerHeight)
+    ctx.closePath()
+    ctx.fill()
+  }
+
+  ctx.globalAlpha = 0.5
+  ctx.strokeStyle = hexToRgba(palette.highlight, 0.35)
+  ctx.lineWidth = tree.size * 0.12
+  ctx.beginPath()
+  ctx.moveTo(0, -height * 0.48)
+  ctx.lineTo(0, height * 0.2)
+  ctx.stroke()
+  ctx.globalAlpha = 1
+
+  ctx.restore()
+}
+
 function drawTreeClusters(ctx, island, canopyPath) {
   if (!island.treeClusters?.length) {
     return
@@ -1160,20 +1565,12 @@ function drawTreeClusters(ctx, island, canopyPath) {
   ctx.save()
   ctx.clip(canopyPath)
   for (const cluster of island.treeClusters) {
-    for (const blob of cluster.blobs) {
-      ctx.fillStyle = 'rgba(15, 42, 28, 0.3)'
-      ctx.beginPath()
-      ctx.ellipse(blob.x + blob.size * 0.12, blob.y + blob.size * 0.4, blob.size * 1.05, blob.size * 0.62, 0, 0, TWO_PI)
-      ctx.fill()
-
-      const canopy = ctx.createRadialGradient(blob.x - blob.size * 0.3, blob.y - blob.size * 0.4, blob.size * 0.18, blob.x, blob.y, blob.size * 1.05)
-      canopy.addColorStop(0, hexToRgba(island.palette.highlight, 0.88))
-      canopy.addColorStop(0.55, hexToRgba(island.palette.canopy, 0.95))
-      canopy.addColorStop(1, 'rgba(14, 58, 36, 0.95)')
-      ctx.fillStyle = canopy
-      ctx.beginPath()
-      ctx.ellipse(blob.x, blob.y, blob.size * 1.08, blob.size, 0, 0, TWO_PI)
-      ctx.fill()
+    for (const tree of cluster.trees) {
+      if (tree.type === 'conifer') {
+        drawConiferTree(ctx, tree, island.palette)
+      } else {
+        drawBroadleafTree(ctx, tree, island.palette)
+      }
     }
   }
   ctx.restore()
