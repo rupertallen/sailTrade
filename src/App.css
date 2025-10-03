@@ -1,0 +1,69 @@
+.app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: #f2ede3;
+}
+
+.world-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: transparent;
+}
+
+.overlay {
+  position: absolute;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1.25rem 2rem;
+  border-radius: 18px;
+  background: rgba(10, 18, 26, 0.45);
+  box-shadow: 0 25px 45px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px);
+  text-align: center;
+  max-width: min(90vw, 520px);
+}
+
+.title {
+  font-size: clamp(1.5rem, 2vw + 1rem, 2.2rem);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+.stats {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.75rem;
+  opacity: 0.9;
+}
+
+.instructions {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  opacity: 0.82;
+}
+
+.instructions strong {
+  color: #ffe5b0;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .overlay {
+    top: 1rem;
+    padding: 1rem 1.4rem;
+  }
+
+  .stats {
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+}
