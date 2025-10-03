@@ -17,14 +17,81 @@ const controlKeys = {
   right: ['d', 'arrowright'],
 }
 
-function generateIslands(count) {
+function generateRandomSeed() {
+  if (typeof crypto !== 'undefined' && crypto?.getRandomValues) {
+    const array = crypto.getRandomValues(new Uint32Array(2))
+    return Array.from(array, (num) => num.toString(36)).join('').slice(0, 16)
+  }
+  return Math.random().toString(36).slice(2, 10)
+}
+
+function cyrb128(str) {
+  let h1 = 1779033703
+  let h2 = 3144134277
+  let h3 = 1013904242
+  let h4 = 2773480762
+
+  for (let i = 0; i < str.length; i += 1) {
+    const ch = str.charCodeAt(i)
+    h1 = Math.imul(h1 ^ ch, 597399067) >>> 0
+    h2 = Math.imul(h2 ^ ch, 2869860233) >>> 0
+    h3 = Math.imul(h3 ^ ch, 951274213) >>> 0
+    h4 = Math.imul(h4 ^ ch, 2716044179) >>> 0
+  }
+
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067) >>> 0
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233) >>> 0
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213) >>> 0
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179) >>> 0
+
+  return [h1, h2, h3, h4]
+}
+
+function sfc32(a, b, c, d) {
+  return function random() {
+    a >>>= 0
+    b >>>= 0
+    c >>>= 0
+    d >>>= 0
+    const t = (a + b) | 0
+    a = b ^ (b >>> 9)
+    b = (c + (c << 3)) | 0
+    c = ((c << 21) | (c >>> 11)) >>> 0
+    c = (c + t) | 0
+    d = (d + 1) | 0
+    const result = (t + d) | 0
+    return (result >>> 0) / 4294967296
+  }
+}
+
+function createSeededRng(seedValue) {
+  const normalizedSeed = seedValue?.toString().trim() ?? ''
+  const [a, b, c, d] = cyrb128(normalizedSeed)
+  const random = sfc32(a, b, c, d)
+  // Warm up the generator to disperse initial values
+  for (let i = 0; i < 12; i += 1) {
+    random()
+  }
+  return random
+}
+
+function createInitialBoatState() {
+  return {
+    x: MAP_SIZE / 2,
+    y: MAP_SIZE / 2,
+    heading: -Math.PI / 2,
+    speed: 0,
+  }
+}
+
+function generateIslands(count, random = Math.random) {
   const islands = []
   let attempts = 0
   while (islands.length < count && attempts < count * 60) {
     attempts += 1
-    const radius = 180 + Math.random() * 260
-    const x = Math.random() * MAP_SIZE
-    const y = Math.random() * MAP_SIZE
+    const radius = 180 + random() * 260
+    const x = random() * MAP_SIZE
+    const y = random() * MAP_SIZE
 
     if (
       islands.some((existing) => {
@@ -36,14 +103,14 @@ function generateIslands(count) {
       continue
     }
 
-    const segments = 14 + Math.floor(Math.random() * 10)
+    const segments = 14 + Math.floor(random() * 10)
     const points = []
-    const contourNoise = 0.4 + Math.random() * 0.3
+    const contourNoise = 0.4 + random() * 0.3
 
     for (let j = 0; j < segments; j += 1) {
       const angle = (j / segments) * Math.PI * 2
-      const bump = 0.78 + Math.random() * 0.35
-      const wobble = 1 + Math.sin(angle * 3 + Math.random() * 2) * contourNoise
+      const bump = 0.78 + random() * 0.35
+      const wobble = 1 + Math.sin(angle * 3 + random() * 2) * contourNoise
       const r = radius * bump * wobble
       points.push({
         x: Math.cos(angle) * r,
@@ -57,15 +124,15 @@ function generateIslands(count) {
       y,
       radius,
       points,
-      palette: pickPalette(),
-      detailPoints: generateDetailPoints(),
+      palette: pickPalette(random),
+      detailPoints: generateDetailPoints(random),
     })
   }
 
   return islands
 }
 
-function pickPalette() {
+function pickPalette(random = Math.random) {
   const palettes = [
     {
       shore: '#f4d9a0',
@@ -92,24 +159,24 @@ function pickPalette() {
       highlight: '#ffe9c0',
     },
   ]
-  return palettes[Math.floor(Math.random() * palettes.length)]
+  return palettes[Math.floor(random() * palettes.length)]
 }
 
-function generateDetailPoints() {
+function generateDetailPoints(random = Math.random) {
   return Array.from({ length: 18 }, () => ({
-    angle: Math.random() * Math.PI * 2,
-    distance: 0.2 + Math.random() * 0.6,
+    angle: random() * Math.PI * 2,
+    distance: 0.2 + random() * 0.6,
   }))
 }
 
-function generateWaves(count) {
+function generateWaves(count, random = Math.random) {
   return Array.from({ length: count }, () => ({
-    x: Math.random() * MAP_SIZE,
-    y: Math.random() * MAP_SIZE,
-    amplitude: 18 + Math.random() * 24,
-    length: 60 + Math.random() * 120,
-    speed: 12 + Math.random() * 22,
-    phase: Math.random() * Math.PI * 2,
+    x: random() * MAP_SIZE,
+    y: random() * MAP_SIZE,
+    amplitude: 18 + random() * 24,
+    length: 60 + random() * 120,
+    speed: 12 + random() * 22,
+    phase: random() * Math.PI * 2,
   }))
 }
 
@@ -131,20 +198,38 @@ function useWindowSize() {
 function App() {
   const canvasRef = useRef(null)
   const pressedKeys = useRef(new Set())
-  const wavesRef = useRef(generateWaves(320))
+  const [seed, setSeed] = useState(() => generateRandomSeed())
+  const [seedInput, setSeedInput] = useState(seed)
+  const [copyStatus, setCopyStatus] = useState('')
+  const copyTimeoutRef = useRef(null)
+
+  const seedData = useMemo(() => {
+    const random = createSeededRng(seed)
+    return {
+      islands: generateIslands(ISLAND_COUNT, random),
+      waves: generateWaves(320, random),
+    }
+  }, [seed])
+
+  const islands = seedData.islands
+  const wavesRef = useRef(seedData.waves.map((wave) => ({ ...wave })))
+  useEffect(() => {
+    wavesRef.current = seedData.waves.map((wave) => ({ ...wave }))
+  }, [seedData.waves])
+
   const { width, height } = useWindowSize()
 
-  const islands = useMemo(() => generateIslands(ISLAND_COUNT), [])
-
-  const [boatState, setBoatState] = useState({
-    x: MAP_SIZE / 2,
-    y: MAP_SIZE / 2,
-    heading: -Math.PI / 2,
-    speed: 0,
-  })
+  const [boatState, setBoatState] = useState(() => createInitialBoatState())
 
   const boatRef = useRef(boatState)
   boatRef.current = boatState
+
+  useEffect(() => {
+    const resetState = createInitialBoatState()
+    boatRef.current = resetState
+    setBoatState(resetState)
+    pressedKeys.current.clear()
+  }, [seed])
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -168,6 +253,12 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
+
+  useEffect(() => () => {
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current)
     }
   }, [])
 
@@ -263,6 +354,49 @@ function App() {
     }
   }, [height, width, islands])
 
+  const handleSeedSubmit = (event) => {
+    event.preventDefault()
+    const nextSeed = seedInput.trim()
+    if (nextSeed.length === 0) {
+      const randomSeed = generateRandomSeed()
+      setSeed(randomSeed)
+      setSeedInput(randomSeed)
+      setCopyStatus('')
+      return
+    }
+    setSeed(nextSeed)
+    setSeedInput(nextSeed)
+    setCopyStatus('')
+  }
+
+  const handleRandomSeed = () => {
+    const randomSeed = generateRandomSeed()
+    setSeed(randomSeed)
+    setSeedInput(randomSeed)
+    setCopyStatus('')
+  }
+
+  const handleCopySeed = async () => {
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current)
+    }
+
+    if (navigator?.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(seed)
+        setCopyStatus('Seed copied!')
+      } catch (error) {
+        setCopyStatus('Copy unavailable')
+      }
+    } else {
+      setCopyStatus('Copy unavailable')
+    }
+
+    copyTimeoutRef.current = setTimeout(() => {
+      setCopyStatus('')
+    }, 2000)
+  }
+
   return (
     <div className="app">
       <canvas ref={canvasRef} className="world-canvas" />
@@ -278,6 +412,32 @@ function App() {
         <div className="instructions">
           Press <strong>↑</strong>/<strong>W</strong> to catch more wind, <strong>↓</strong>/<strong>S</strong> to trim your sails, and use <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong> to turn the bow.
         </div>
+        <form className="seed-form" onSubmit={handleSeedSubmit}>
+          <label htmlFor="seed-input">World seed</label>
+          <div className="seed-actions">
+            <input
+              id="seed-input"
+              className="seed-input"
+              value={seedInput}
+              onChange={(event) => setSeedInput(event.target.value)}
+              placeholder="Enter or paste a seed"
+              spellCheck="false"
+            />
+            <button type="submit" className="seed-button">
+              Load
+            </button>
+            <button type="button" className="seed-button" onClick={handleRandomSeed}>
+              Random
+            </button>
+            <button type="button" className="seed-button" onClick={handleCopySeed}>
+              Copy
+            </button>
+          </div>
+          <div className="seed-footer">
+            <span className="seed-hint">Share this seed to sail the same waters.</span>
+            {copyStatus && <span className="seed-status">{copyStatus}</span>}
+          </div>
+        </form>
       </div>
     </div>
   )
