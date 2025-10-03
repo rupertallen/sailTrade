@@ -37,9 +37,21 @@
   align-self: center;
   width: min(100%, 1100px);
   display: flex;
-  align-items: center;
-  gap: 1.5rem;
+  flex-direction: column;
+  gap: 0;
   padding: 0.85rem 1.75rem;
+}
+
+.top-menu--expanded {
+  gap: 1rem;
+  padding-bottom: 1.35rem;
+}
+
+.top-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
   flex-wrap: wrap;
 }
 
@@ -52,11 +64,49 @@
   text-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
 }
 
+.menu-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.menu-toggle-button {
+  padding: 0.5rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(18, 54, 70, 0.65);
+  color: #f8f4eb;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.menu-toggle-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 222, 178, 0.55);
+}
+
+.menu-toggle-button.is-active {
+  background: linear-gradient(135deg, rgba(255, 210, 148, 0.78), rgba(255, 178, 107, 0.78));
+  color: #1f2e36;
+  border-color: rgba(255, 234, 205, 0.75);
+}
+
+.top-menu-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
 .menu-instructions {
   font-size: 0.9rem;
-  line-height: 1.3;
+  line-height: 1.35;
   color: rgba(240, 245, 248, 0.92);
-  max-width: 320px;
+  max-width: 540px;
 }
 
 .menu-instructions strong {
@@ -145,12 +195,12 @@
 
 .bottom-menu {
   align-self: center;
-  width: min(100%, 520px);
+  width: min(100%, 1100px);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1.5rem;
-  padding: 0.85rem 1.6rem;
+  padding: 0.85rem 1.75rem;
 }
 
 .ship-title {
@@ -163,6 +213,8 @@
 .ship-stats {
   display: flex;
   gap: 1.75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .ship-stat {
@@ -191,8 +243,15 @@
   }
 
   .top-menu {
-    gap: 1rem;
     padding: 0.75rem 1.25rem;
+  }
+
+  .top-menu--expanded {
+    padding-bottom: 1.15rem;
+  }
+
+  .menu-actions {
+    justify-content: flex-start;
   }
 
   .menu-instructions {
@@ -208,8 +267,7 @@
   }
 
   .bottom-menu {
-    width: min(100%, 420px);
-    padding: 0.75rem 1.2rem;
+    padding: 0.75rem 1.25rem;
   }
 }
 
@@ -220,6 +278,11 @@
 
   .menu-instructions {
     font-size: 0.85rem;
+  }
+
+  .menu-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .seed-buttons {
