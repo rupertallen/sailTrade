@@ -14,7 +14,7 @@ Then open the local development URL shown in the terminal.
 ## Controls
 
 - **W / ↑** – accelerate forward
-- **S / ↓** – slow or sail astern
+- **S / ↓** – reef sails and slow your speed
 - **A / ←** – turn port
 - **D / →** – turn starboard
 

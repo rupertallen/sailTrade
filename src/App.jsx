@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
-const MAP_SIZE = 3600
-const ISLAND_COUNT = 22
-const MAX_FORWARD_SPEED = 220 // world units per second
-const MAX_REVERSE_SPEED = 60
-const ACCELERATION = 160
-const TURN_RATE = 1.6
-const DRAG = 0.9
+const MAP_SIZE = 10000
+const ISLAND_COUNT = 16
+const MIN_ISLAND_GAP = 900
+const MAX_FORWARD_SPEED = 260 // world units per second
+const ACCELERATION = 140
+const BRAKE_DECELERATION = 220
+const TURN_RATE = 1.8
+const DRAG = 0.8
 
 const controlKeys = {
   forward: ['w', 'arrowup'],
@@ -18,30 +19,46 @@ const controlKeys = {
 
 function generateIslands(count) {
   const islands = []
-  for (let i = 0; i < count; i += 1) {
-    const radius = 120 + Math.random() * 240
+  let attempts = 0
+  while (islands.length < count && attempts < count * 60) {
+    attempts += 1
+    const radius = 180 + Math.random() * 260
     const x = Math.random() * MAP_SIZE
     const y = Math.random() * MAP_SIZE
-    const segments = 12 + Math.floor(Math.random() * 8)
+
+    if (
+      islands.some((existing) => {
+        const dx = existing.x - x
+        const dy = existing.y - y
+        return Math.hypot(dx, dy) < existing.radius + radius + MIN_ISLAND_GAP
+      })
+    ) {
+      continue
+    }
+
+    const segments = 14 + Math.floor(Math.random() * 10)
     const points = []
+    const contourNoise = 0.4 + Math.random() * 0.3
 
     for (let j = 0; j < segments; j += 1) {
       const angle = (j / segments) * Math.PI * 2
-      const wobble = 0.65 + Math.random() * 0.55
+      const bump = 0.78 + Math.random() * 0.35
+      const wobble = 1 + Math.sin(angle * 3 + Math.random() * 2) * contourNoise
+      const r = radius * bump * wobble
       points.push({
-        x: Math.cos(angle) * radius * wobble,
-        y: Math.sin(angle) * radius * wobble,
+        x: Math.cos(angle) * r,
+        y: Math.sin(angle) * r,
       })
     }
 
     islands.push({
-      id: `island-${i}`,
+      id: `island-${islands.length}`,
       x,
       y,
       radius,
       points,
       palette: pickPalette(),
-      brushTexture: generateBrushTexture(),
+      detailPoints: generateDetailPoints(),
     })
   }
 
@@ -50,19 +67,38 @@ function generateIslands(count) {
 
 function pickPalette() {
   const palettes = [
-    ['#d1c7a1', '#a58f6f', '#6f5d43'],
-    ['#dcd2b8', '#bba177', '#7f704f'],
-    ['#e0d3a2', '#b89961', '#8d7549'],
+    {
+      shore: '#f4d9a0',
+      beach: '#f7e5b8',
+      grass: '#63b365',
+      canopy: '#2f7e4f',
+      cliffs: '#8b5528',
+      highlight: '#fffae5',
+    },
+    {
+      shore: '#f5c874',
+      beach: '#ffe7a9',
+      grass: '#55c27c',
+      canopy: '#1d7a5a',
+      cliffs: '#a16c3c',
+      highlight: '#fff2d0',
+    },
+    {
+      shore: '#f1c082',
+      beach: '#fddd9a',
+      grass: '#6ccf8a',
+      canopy: '#337a44',
+      cliffs: '#82492a',
+      highlight: '#ffe9c0',
+    },
   ]
   return palettes[Math.floor(Math.random() * palettes.length)]
 }
 
-function generateBrushTexture() {
-  return Array.from({ length: 24 }, () => ({
+function generateDetailPoints() {
+  return Array.from({ length: 18 }, () => ({
     angle: Math.random() * Math.PI * 2,
-    distance: Math.random(),
-    size: 0.6 + Math.random() * 0.9,
-    opacity: 0.18 + Math.random() * 0.25,
+    distance: 0.2 + Math.random() * 0.6,
   }))
 }
 
@@ -95,7 +131,7 @@ function useWindowSize() {
 function App() {
   const canvasRef = useRef(null)
   const pressedKeys = useRef(new Set())
-  const wavesRef = useRef(generateWaves(220))
+  const wavesRef = useRef(generateWaves(320))
   const { width, height } = useWindowSize()
 
   const islands = useMemo(() => generateIslands(ISLAND_COUNT), [])
@@ -156,17 +192,21 @@ function App() {
 
       if (commands.forward) {
         current.speed = Math.min(current.speed + ACCELERATION * dt, MAX_FORWARD_SPEED)
-      } else if (commands.backward) {
-        current.speed = Math.max(current.speed - ACCELERATION * dt * 0.6, -MAX_REVERSE_SPEED)
-      } else {
+      }
+
+      if (commands.backward) {
+        current.speed = Math.max(current.speed - BRAKE_DECELERATION * dt, 0)
+      }
+
+      if (!commands.forward && !commands.backward) {
         const dragFactor = Math.max(0, 1 - DRAG * dt)
         current.speed *= dragFactor
-        if (Math.abs(current.speed) < 2) {
+        if (current.speed < 2) {
           current.speed = 0
         }
       }
 
-      const turnStrength = 1 + Math.min(Math.abs(current.speed) / MAX_FORWARD_SPEED, 1)
+      const turnStrength = 0.6 + Math.min(current.speed / MAX_FORWARD_SPEED, 1)
 
       if (commands.left) {
         current.heading -= TURN_RATE * dt * turnStrength
@@ -183,7 +223,7 @@ function App() {
         current.x = clamp(proposedX, 0, MAP_SIZE)
         current.y = clamp(proposedY, 0, MAP_SIZE)
       } else {
-        current.speed = Math.min(current.speed, 30)
+        current.speed = Math.min(current.speed, 38)
       }
 
       boatRef.current = current
@@ -227,16 +267,16 @@ function App() {
     <div className="app">
       <canvas ref={canvasRef} className="world-canvas" />
       <div className="overlay">
-        <div className="title">SailTrade — Shores of Promise</div>
+        <div className="title">SailTrade</div>
         <div className="stats">
-          <span>Speed: {Math.abs(Math.round(boatState.speed))} kn</span>
+          <span>Speed: {Math.round(boatState.speed)} kn</span>
           <span>
             Heading: {Math.round((((boatState.heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (180 / Math.PI))}
             °
           </span>
         </div>
         <div className="instructions">
-          Steer with <strong>WASD</strong> or <strong>arrow keys</strong>. Explore the painted archipelago and find your own trade winds.
+          Press <strong>↑</strong>/<strong>W</strong> to catch more wind, <strong>↓</strong>/<strong>S</strong> to trim your sails, and use <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong> to turn the bow.
         </div>
       </div>
     </div>
@@ -278,6 +318,7 @@ function drawScene(ctx, viewport, boat, islands, waves) {
     y: boat.y - height / 2,
   }
 
+  ctx.imageSmoothingEnabled = false
   paintSea(ctx, width, height, camera, waves)
   drawIslands(ctx, islands, camera)
   drawBoat(ctx, boat, camera)
@@ -286,9 +327,9 @@ function drawScene(ctx, viewport, boat, islands, waves) {
 
 function paintSea(ctx, width, height, camera, waves) {
   const gradient = ctx.createLinearGradient(0, 0, width, height)
-  gradient.addColorStop(0, '#203244')
-  gradient.addColorStop(0.4, '#1a4a63')
-  gradient.addColorStop(1, '#112433')
+  gradient.addColorStop(0, '#102a4d')
+  gradient.addColorStop(0.5, '#114b73')
+  gradient.addColorStop(1, '#0a243b')
   ctx.fillStyle = gradient
   ctx.fillRect(0, 0, width, height)
 
@@ -306,9 +347,9 @@ function paintSea(ctx, width, height, camera, waves) {
     ctx.translate(screenX, screenY)
     ctx.rotate(angle)
     const waveGradient = ctx.createLinearGradient(-wave.length / 2, 0, wave.length / 2, 0)
-    waveGradient.addColorStop(0, 'rgba(207, 231, 247, 0)')
-    waveGradient.addColorStop(0.5, 'rgba(207, 231, 247, 0.18)')
-    waveGradient.addColorStop(1, 'rgba(207, 231, 247, 0)')
+    waveGradient.addColorStop(0, 'rgba(160, 212, 255, 0)')
+    waveGradient.addColorStop(0.5, 'rgba(160, 212, 255, 0.22)')
+    waveGradient.addColorStop(1, 'rgba(160, 212, 255, 0)')
     ctx.fillStyle = waveGradient
     ctx.fillRect(-wave.length / 2, -wave.amplitude / 2, wave.length, wave.amplitude)
     ctx.restore()
@@ -327,47 +368,32 @@ function drawIslands(ctx, islands, camera) {
     ctx.save()
     ctx.translate(screenX, screenY)
 
-    const path = new Path2D()
-    island.points.forEach((point, index) => {
-      if (index === 0) {
-        path.moveTo(point.x, point.y)
-      } else {
-        path.lineTo(point.x, point.y)
-      }
-    })
-    path.closePath()
+    const coastPath = buildPath(island.points)
+    const beachPoints = scalePoints(island.points, 0.8)
+    const grassPoints = scalePoints(island.points, 0.58)
+    const canopyPoints = scalePoints(island.points, 0.4)
 
-    const [highlight, mid, shadow] = island.palette
-    const fill = ctx.createRadialGradient(0, 0, island.radius * 0.1, 0, 0, island.radius * 1.1)
-    fill.addColorStop(0, highlight)
-    fill.addColorStop(0.55, mid)
-    fill.addColorStop(1, shadow)
-    ctx.fillStyle = fill
-    ctx.fill(path)
+    ctx.fillStyle = island.palette.shore
+    ctx.strokeStyle = `rgba(0, 0, 0, 0.45)`
+    ctx.lineWidth = 4
+    ctx.fill(coastPath)
+    ctx.stroke(coastPath)
 
-    ctx.lineWidth = 6
-    ctx.strokeStyle = 'rgba(62, 51, 35, 0.6)'
-    ctx.stroke(path)
+    ctx.fillStyle = island.palette.beach
+    ctx.fill(buildPath(beachPoints))
+
+    ctx.fillStyle = island.palette.grass
+    ctx.fill(buildPath(grassPoints))
 
     ctx.save()
-    ctx.globalCompositeOperation = 'overlay'
-    for (const brush of island.brushTexture) {
-      const length = island.radius * 0.6 * brush.size
-      const offsetRadius = island.radius * 0.3 * brush.distance
-      const bx = Math.cos(brush.angle) * offsetRadius
-      const by = Math.sin(brush.angle) * offsetRadius
-      ctx.save()
-      ctx.translate(bx, by)
-      ctx.rotate(brush.angle)
-      const brushGradient = ctx.createLinearGradient(-length / 2, 0, length / 2, 0)
-      brushGradient.addColorStop(0, 'rgba(255, 243, 214, 0)')
-      brushGradient.addColorStop(0.5, `rgba(255, 243, 214, ${brush.opacity})`)
-      brushGradient.addColorStop(1, 'rgba(255, 243, 214, 0)')
-      ctx.fillStyle = brushGradient
-      ctx.fillRect(-length / 2, -8, length, 16)
-      ctx.restore()
-    }
+    ctx.fillStyle = island.palette.canopy
+    const canopyPath = buildPath(canopyPoints)
+    ctx.fill(canopyPath)
+    addCanopyHighlights(ctx, canopyPoints, island.palette.highlight)
     ctx.restore()
+
+    addCliffStrata(ctx, coastPath, island)
+    sprinkleDetails(ctx, island)
 
     ctx.restore()
   }
@@ -380,43 +406,148 @@ function drawBoat(ctx, boat, camera) {
   ctx.translate(screenX, screenY)
   ctx.rotate(boat.heading)
 
+  drawBoatShadow(ctx)
+  drawBoatHull(ctx)
+  drawDeckDetails(ctx)
+  drawMastAndSails(ctx)
+
+  ctx.restore()
+}
+
+function buildPath(points) {
+  const path = new Path2D()
+  points.forEach((point, index) => {
+    if (index === 0) {
+      path.moveTo(point.x, point.y)
+    } else {
+      path.lineTo(point.x, point.y)
+    }
+  })
+  path.closePath()
+  return path
+}
+
+function scalePoints(points, factor) {
+  return points.map((point) => ({ x: point.x * factor, y: point.y * factor }))
+}
+
+function addCliffStrata(ctx, coastPath, island) {
   ctx.save()
+  ctx.clip(coastPath)
   ctx.globalAlpha = 0.35
-  ctx.fillStyle = 'rgba(240, 248, 255, 0.35)'
+  ctx.fillStyle = island.palette.cliffs
+  for (let i = -island.radius; i < island.radius; i += 18) {
+    ctx.fillRect(-island.radius, i, island.radius * 2, 6)
+  }
+  ctx.restore()
+}
+
+function addCanopyHighlights(ctx, points, highlightColor) {
+  ctx.save()
+  ctx.fillStyle = highlightColor
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    const midX = (a.x + b.x) / 2
+    const midY = (a.y + b.y) / 2
+    ctx.fillRect(midX - 2, midY - 2, 4, 4)
+  }
+  ctx.restore()
+}
+
+function sprinkleDetails(ctx, island) {
+  ctx.save()
+  ctx.fillStyle = island.palette.highlight
+  island.detailPoints.forEach((detail) => {
+    const radius = island.radius * detail.distance
+    const x = Math.cos(detail.angle) * radius
+    const y = Math.sin(detail.angle) * radius
+    ctx.fillRect(x - 2, y - 2, 4, 4)
+  })
+  ctx.restore()
+}
+
+function drawBoatShadow(ctx) {
+  ctx.save()
+  ctx.globalAlpha = 0.25
+  ctx.fillStyle = 'rgba(22, 32, 42, 0.35)'
   ctx.beginPath()
-  ctx.moveTo(-12, 28)
-  ctx.quadraticCurveTo(-32, 16, -48, 0)
-  ctx.quadraticCurveTo(-4, 12, 0, 0)
-  ctx.quadraticCurveTo(4, 12, 48, 0)
-  ctx.quadraticCurveTo(32, 16, 12, 28)
+  ctx.moveTo(0, 42)
+  ctx.quadraticCurveTo(24, 30, 32, 0)
+  ctx.quadraticCurveTo(0, 18, -32, 0)
+  ctx.quadraticCurveTo(-24, 30, 0, 42)
   ctx.fill()
   ctx.restore()
+}
 
-  const hullGradient = ctx.createLinearGradient(0, -36, 0, 36)
-  hullGradient.addColorStop(0, '#f7f1da')
-  hullGradient.addColorStop(0.45, '#d8c6a0')
-  hullGradient.addColorStop(1, '#8f7257')
+function drawBoatHull(ctx) {
+  const hullGradient = ctx.createLinearGradient(0, -42, 0, 42)
+  hullGradient.addColorStop(0, '#f4cfa5')
+  hullGradient.addColorStop(0.4, '#b87a3b')
+  hullGradient.addColorStop(1, '#6b3a16')
   ctx.fillStyle = hullGradient
   ctx.beginPath()
-  ctx.moveTo(0, -36)
-  ctx.quadraticCurveTo(22, -12, 16, 32)
-  ctx.quadraticCurveTo(0, 44, -16, 32)
-  ctx.quadraticCurveTo(-22, -12, 0, -36)
-  ctx.fill()
-
-  ctx.strokeStyle = 'rgba(62, 44, 33, 0.6)'
-  ctx.lineWidth = 3
-  ctx.stroke()
-
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.65)'
-  ctx.beginPath()
-  ctx.moveTo(0, -30)
-  ctx.lineTo(12, 8)
-  ctx.lineTo(-12, 8)
+  ctx.moveTo(0, -46)
+  ctx.lineTo(20, -14)
+  ctx.lineTo(16, 34)
+  ctx.lineTo(0, 48)
+  ctx.lineTo(-16, 34)
+  ctx.lineTo(-20, -14)
   ctx.closePath()
   ctx.fill()
 
-  ctx.restore()
+  ctx.strokeStyle = '#341d0e'
+  ctx.lineWidth = 3
+  ctx.stroke()
+
+  ctx.strokeStyle = '#ffe0b8'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(0, -40)
+  ctx.lineTo(12, -12)
+  ctx.lineTo(8, 28)
+  ctx.lineTo(0, 36)
+  ctx.lineTo(-8, 28)
+  ctx.lineTo(-12, -12)
+  ctx.closePath()
+  ctx.stroke()
+}
+
+function drawDeckDetails(ctx) {
+  ctx.fillStyle = '#d9a864'
+  ctx.fillRect(-10, -6, 20, 18)
+  ctx.fillStyle = '#8c592e'
+  ctx.fillRect(-6, 6, 12, 10)
+
+  ctx.fillStyle = '#fbe7c7'
+  ctx.fillRect(-3, -24, 6, 10)
+}
+
+function drawMastAndSails(ctx) {
+  ctx.fillStyle = '#5c3b1d'
+  ctx.fillRect(-2, -42, 4, 36)
+  ctx.fillRect(-1, -48, 2, 6)
+  ctx.fillStyle = '#ff3b3b'
+  ctx.fillRect(2, -46, 10, 6)
+  ctx.fillStyle = '#f0f6ff'
+  ctx.beginPath()
+  ctx.moveTo(2, -38)
+  ctx.lineTo(36, -6)
+  ctx.lineTo(2, -6)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.fillStyle = '#cddff8'
+  ctx.beginPath()
+  ctx.moveTo(-2, -32)
+  ctx.lineTo(-34, -2)
+  ctx.lineTo(-2, -2)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.strokeStyle = '#2b2f45'
+  ctx.lineWidth = 2
+  ctx.strokeRect(-2, -42, 4, 36)
 }
 
 function addVignette(ctx, width, height) {
