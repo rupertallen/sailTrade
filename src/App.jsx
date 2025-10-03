@@ -4,6 +4,7 @@ import './App.css'
 const MAP_SIZE = 10000
 const ISLAND_COUNT = 16
 const MIN_ISLAND_GAP = 900
+const TWO_PI = Math.PI * 2
 const MAX_FORWARD_SPEED = 260 // world units per second
 const ACCELERATION = 140
 const BRAKE_DECELERATION = 220
@@ -89,12 +90,229 @@ function createInitialBoatState() {
   }
 }
 
+function normalizeAngle(angle) {
+  return ((angle % TWO_PI) + TWO_PI) % TWO_PI
+}
+
+function shortestAngleDiff(a, b) {
+  const wrapped = normalizeAngle(a - b + Math.PI)
+  return wrapped - Math.PI
+}
+
+function gaussianFalloff(diff, width) {
+  const ratio = diff / width
+  return Math.exp(-(ratio * ratio))
+}
+
+function isAngleBetween(angle, start, end) {
+  const diff = normalizeAngle(end - start)
+  const offset = normalizeAngle(angle - start)
+  return offset <= diff
+}
+
+function hexToRgba(hex, alpha) {
+  const normalized = hex.replace('#', '')
+  const parseValue = (value) => value * 17
+  let r
+  let g
+  let b
+
+  if (normalized.length === 3) {
+    r = parseValue(parseInt(normalized[0], 16))
+    g = parseValue(parseInt(normalized[1], 16))
+    b = parseValue(parseInt(normalized[2], 16))
+  } else {
+    const intValue = parseInt(normalized, 16)
+    r = (intValue >> 16) & 255
+    g = (intValue >> 8) & 255
+    b = intValue & 255
+  }
+
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function generateCoastlineShape(radius, random = Math.random) {
+  const segments = 46 + Math.floor(random() * 20)
+  const mainPhase = random() * TWO_PI
+  const secondaryPhase = random() * TWO_PI
+  const detailPhase = random() * TWO_PI
+  const microPhase = random() * TWO_PI
+
+  const mainAmplitude = 0.18 + random() * 0.08
+  const secondaryAmplitude = 0.12 + random() * 0.06
+  const detailAmplitude = 0.08 + random() * 0.04
+  const microAmplitude = 0.05 + random() * 0.03
+  const jitterStrength = 0.08 + random() * 0.06
+
+  const headlands = Array.from({ length: 3 }, () => ({
+    angle: random() * TWO_PI,
+    width: 0.6 + random() * 0.6,
+    strength: 0.16 + random() * 0.26,
+  }))
+
+  const coves = Array.from({ length: 2 }, () => ({
+    angle: random() * TWO_PI,
+    width: 0.8 + random() * 0.9,
+    strength: 0.12 + random() * 0.22,
+  }))
+
+  const points = []
+
+  for (let i = 0; i < segments; i += 1) {
+    const angle = (i / segments) * TWO_PI
+    let multiplier = 1
+
+    multiplier += Math.sin(angle * 1.1 + mainPhase) * mainAmplitude
+    multiplier += Math.sin(angle * 2.4 + secondaryPhase) * secondaryAmplitude
+    multiplier += Math.sin(angle * 4.8 + detailPhase) * detailAmplitude
+    multiplier += Math.sin(angle * 7.3 + microPhase) * microAmplitude
+
+    for (const headland of headlands) {
+      const diff = shortestAngleDiff(angle, headland.angle)
+      multiplier += gaussianFalloff(diff, headland.width) * headland.strength
+    }
+
+    for (const cove of coves) {
+      const diff = shortestAngleDiff(angle, cove.angle)
+      multiplier -= gaussianFalloff(diff, cove.width) * cove.strength
+    }
+
+    multiplier += (random() - 0.5) * jitterStrength
+
+    const clampedMultiplier = Math.max(0.48, Math.min(1.48, multiplier))
+    const r = radius * clampedMultiplier
+    points.push({
+      angle,
+      radius: r,
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r,
+    })
+  }
+
+  return points
+}
+
+function createInnerRing(points, scale, jitter, random = Math.random) {
+  return points.map((point) => {
+    const jitterAmount = 1 + (random() - 0.5) * jitter
+    const r = point.radius * scale * jitterAmount
+    return {
+      angle: point.angle,
+      radius: r,
+      x: Math.cos(point.angle) * r,
+      y: Math.sin(point.angle) * r,
+    }
+  })
+}
+
+function generateCliffs(random = Math.random) {
+  const cliffs = []
+  const cliffGroups = random() < 0.3 ? 0 : 1 + Math.floor(random() * 2)
+  for (let i = 0; i < cliffGroups; i += 1) {
+    const startAngle = random() * TWO_PI
+    const width = 0.32 + random() * 0.55
+    cliffs.push({
+      startAngle,
+      endAngle: startAngle + width,
+      layers: 2 + Math.floor(random() * 3),
+    })
+  }
+  return cliffs
+}
+
+function generateTreeClusters(canopyPoints, radius, random = Math.random) {
+  const clusterCount = 4 + Math.floor(random() * 6)
+  const clusters = []
+
+  for (let i = 0; i < clusterCount; i += 1) {
+    const anchor = canopyPoints[Math.floor(random() * canopyPoints.length)]
+    const clusterRadius = radius * (0.08 + random() * 0.12)
+    const blobCount = 8 + Math.floor(random() * 12)
+    const blobs = []
+
+    for (let j = 0; j < blobCount; j += 1) {
+      const angle = random() * TWO_PI
+      const distance = Math.sqrt(random()) * clusterRadius
+      const x = anchor.x + Math.cos(angle) * distance
+      const y = anchor.y + Math.sin(angle) * distance
+      const size = radius * (0.016 + random() * 0.032)
+      blobs.push({ x, y, size })
+    }
+
+    clusters.push({ blobs })
+  }
+
+  return clusters
+}
+
+function generateStreams(coastline, radius, random = Math.random) {
+  const streams = []
+  let streamCount = 0
+  const roll = random()
+  if (roll < 0.25) {
+    streamCount = 2
+  } else if (roll < 0.65) {
+    streamCount = 1
+  }
+
+  for (let i = 0; i < streamCount; i += 1) {
+    const outlet = coastline[Math.floor(random() * coastline.length)]
+    const exit = {
+      x: outlet.x * 0.92,
+      y: outlet.y * 0.92,
+    }
+
+    const sourceAngle = normalizeAngle(outlet.angle + Math.PI + (random() - 0.5) * 0.7)
+    const sourceRadius = radius * (0.1 + random() * 0.22)
+    const start = {
+      x: Math.cos(sourceAngle) * sourceRadius,
+      y: Math.sin(sourceAngle) * sourceRadius,
+    }
+
+    const deltaX = exit.x - start.x
+    const deltaY = exit.y - start.y
+    const perpendicular = { x: -deltaY, y: deltaX }
+    const length = Math.hypot(perpendicular.x, perpendicular.y) || 1
+    const bend = radius * (0.05 + random() * 0.08)
+    const bendDir = (random() > 0.5 ? 1 : -1)
+    const offsetX = (perpendicular.x / length) * bend * bendDir
+    const offsetY = (perpendicular.y / length) * bend * bendDir
+
+    const control1 = {
+      x: start.x + deltaX * 0.3 + offsetX,
+      y: start.y + deltaY * 0.3 + offsetY,
+    }
+    const control2 = {
+      x: start.x + deltaX * 0.7 + offsetX * 0.6,
+      y: start.y + deltaY * 0.7 + offsetY * 0.6,
+    }
+
+    const width = 4 + random() * 3
+    streams.push({ start, control1, control2, end: exit, width })
+  }
+
+  return streams
+}
+
+function generateMeadowHighlights(grassPoints, radius, random = Math.random) {
+  const highlightCount = 3 + Math.floor(random() * 4)
+  const highlights = []
+
+  for (let i = 0; i < highlightCount; i += 1) {
+    const anchor = grassPoints[Math.floor(random() * grassPoints.length)]
+    const size = radius * (0.12 + random() * 0.16)
+    highlights.push({ x: anchor.x, y: anchor.y, radius: size })
+  }
+
+  return highlights
+}
+
 function generateIslands(count, random = Math.random) {
   const islands = []
   let attempts = 0
   while (islands.length < count && attempts < count * 60) {
     attempts += 1
-    const radius = 180 + random() * 260
+    const radius = 200 + random() * 320
     const x = random() * MAP_SIZE
     const y = random() * MAP_SIZE
 
@@ -108,29 +326,27 @@ function generateIslands(count, random = Math.random) {
       continue
     }
 
-    const segments = 14 + Math.floor(random() * 10)
-    const points = []
-    const contourNoise = 0.4 + random() * 0.3
+    const coastline = generateCoastlineShape(radius, random)
+    const beach = createInnerRing(coastline, 0.8, 0.16, random)
+    const grass = createInnerRing(coastline, 0.6, 0.18, random)
+    const canopy = createInnerRing(coastline, 0.46, 0.2, random)
 
-    for (let j = 0; j < segments; j += 1) {
-      const angle = (j / segments) * Math.PI * 2
-      const bump = 0.78 + random() * 0.35
-      const wobble = 1 + Math.sin(angle * 3 + random() * 2) * contourNoise
-      const r = radius * bump * wobble
-      points.push({
-        x: Math.cos(angle) * r,
-        y: Math.sin(angle) * r,
-      })
-    }
-
+    const palette = pickPalette(random)
     islands.push({
       id: `island-${islands.length}`,
       x,
       y,
       radius,
-      points,
-      palette: pickPalette(random),
-      detailPoints: generateDetailPoints(random),
+      points: coastline.map(({ x: px, y: py }) => ({ x: px, y: py })),
+      coastline,
+      beach,
+      grass,
+      canopy,
+      palette,
+      cliffs: generateCliffs(random),
+      treeClusters: generateTreeClusters(canopy, radius, random),
+      streams: generateStreams(coastline, radius, random),
+      highlights: generateMeadowHighlights(grass, radius, random),
     })
   }
 
@@ -165,13 +381,6 @@ function pickPalette(random = Math.random) {
     },
   ]
   return palettes[Math.floor(random() * palettes.length)]
-}
-
-function generateDetailPoints(random = Math.random) {
-  return Array.from({ length: 18 }, () => ({
-    angle: random() * Math.PI * 2,
-    distance: 0.2 + random() * 0.6,
-  }))
 }
 
 function generateWaves(count, random = Math.random) {
@@ -659,33 +868,23 @@ function drawIslands(ctx, islands, camera) {
 
     ctx.save()
     ctx.translate(screenX, screenY)
+    ctx.lineJoin = 'round'
+    ctx.lineCap = 'round'
 
-    const coastPath = buildPath(island.points)
-    const beachPoints = scalePoints(island.points, 0.8)
-    const grassPoints = scalePoints(island.points, 0.58)
-    const canopyPoints = scalePoints(island.points, 0.4)
+    const coastPath = buildSmoothPath(island.coastline)
+    const beachPath = buildSmoothPath(island.beach)
+    const grassPath = buildSmoothPath(island.grass)
+    const canopyPath = buildSmoothPath(island.canopy)
 
-    ctx.fillStyle = island.palette.shore
-    ctx.strokeStyle = `rgba(0, 0, 0, 0.45)`
-    ctx.lineWidth = 4
-    ctx.fill(coastPath)
-    ctx.stroke(coastPath)
-
-    ctx.fillStyle = island.palette.beach
-    ctx.fill(buildPath(beachPoints))
-
-    ctx.fillStyle = island.palette.grass
-    ctx.fill(buildPath(grassPoints))
-
-    ctx.save()
-    ctx.fillStyle = island.palette.canopy
-    const canopyPath = buildPath(canopyPoints)
-    ctx.fill(canopyPath)
-    addCanopyHighlights(ctx, canopyPoints, island.palette.highlight)
-    ctx.restore()
-
-    addCliffStrata(ctx, coastPath, island)
-    sprinkleDetails(ctx, island)
+    drawWaterHalo(ctx, island, coastPath)
+    drawShore(ctx, island, coastPath)
+    drawBeach(ctx, island, beachPath)
+    drawCliffs(ctx, island, coastPath)
+    drawGrass(ctx, island, grassPath)
+    addMeadowHighlights(ctx, island, grassPath)
+    drawStreamsOnIsland(ctx, island, grassPath)
+    drawCanopyBase(ctx, island, canopyPath)
+    drawTreeClusters(ctx, island, canopyPath)
 
     ctx.restore()
   }
@@ -798,56 +997,225 @@ function drawBoat(ctx, boat, camera) {
   ctx.restore()
 }
 
-function buildPath(points) {
+function buildSmoothPath(points) {
   const path = new Path2D()
-  points.forEach((point, index) => {
-    if (index === 0) {
-      path.moveTo(point.x, point.y)
-    } else {
-      path.lineTo(point.x, point.y)
-    }
-  })
+  if (points.length === 0) {
+    return path
+  }
+
+  const first = points[0]
+  const last = points[points.length - 1]
+  path.moveTo((first.x + last.x) / 2, (first.y + last.y) / 2)
+
+  for (let i = 0; i < points.length; i += 1) {
+    const current = points[i]
+    const next = points[(i + 1) % points.length]
+    const midX = (current.x + next.x) / 2
+    const midY = (current.y + next.y) / 2
+    path.quadraticCurveTo(current.x, current.y, midX, midY)
+  }
+
   path.closePath()
   return path
 }
 
-function scalePoints(points, factor) {
-  return points.map((point) => ({ x: point.x * factor, y: point.y * factor }))
+function drawWaterHalo(ctx, island, coastPath) {
+  ctx.save()
+  ctx.globalCompositeOperation = 'lighter'
+  ctx.globalAlpha = 0.2
+  ctx.strokeStyle = 'rgba(223, 248, 255, 0.7)'
+  ctx.lineWidth = 6
+  ctx.stroke(coastPath)
+  ctx.globalAlpha = 0.12
+  ctx.lineWidth = 12
+  ctx.stroke(coastPath)
+  ctx.restore()
 }
 
-function addCliffStrata(ctx, coastPath, island) {
+function drawShore(ctx, island, coastPath) {
+  ctx.save()
+  ctx.fillStyle = island.palette.shore
+  ctx.fill(coastPath)
+  ctx.strokeStyle = 'rgba(32, 42, 48, 0.38)'
+  ctx.lineWidth = 3.4
+  ctx.stroke(coastPath)
+
+  ctx.clip(coastPath)
+  const glow = ctx.createRadialGradient(0, 0, island.radius * 0.3, 0, 0, island.radius * 1.05)
+  glow.addColorStop(0, 'rgba(255, 255, 255, 0)')
+  glow.addColorStop(0.65, 'rgba(255, 255, 255, 0)')
+  glow.addColorStop(1, hexToRgba(island.palette.highlight, 0.3))
+  ctx.globalAlpha = 0.55
+  ctx.fillStyle = glow
+  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
+  ctx.restore()
+}
+
+function drawBeach(ctx, island, beachPath) {
+  ctx.save()
+  ctx.fillStyle = island.palette.beach
+  ctx.fill(beachPath)
+
+  ctx.clip(beachPath)
+  const warmth = ctx.createLinearGradient(-island.radius, -island.radius, island.radius, island.radius)
+  warmth.addColorStop(0, 'rgba(255, 255, 255, 0.4)')
+  warmth.addColorStop(0.5, 'rgba(255, 255, 255, 0.05)')
+  warmth.addColorStop(1, hexToRgba(island.palette.cliffs, 0.18))
+  ctx.globalAlpha = 0.45
+  ctx.fillStyle = warmth
+  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
+
+  ctx.globalAlpha = 0.24
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'
+  for (let y = -island.radius; y <= island.radius; y += 16) {
+    ctx.beginPath()
+    ctx.moveTo(-island.radius, y)
+    ctx.lineTo(island.radius, y + island.radius * 0.12)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+function drawGrass(ctx, island, grassPath) {
+  ctx.save()
+  ctx.fillStyle = island.palette.grass
+  ctx.fill(grassPath)
+
+  ctx.clip(grassPath)
+  const gradient = ctx.createRadialGradient(0, 0, island.radius * 0.22, 0, 0, island.radius * 0.92)
+  gradient.addColorStop(0, hexToRgba(island.palette.highlight, 0.32))
+  gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.05)')
+  gradient.addColorStop(1, 'rgba(0, 0, 0, 0.24)')
+  ctx.globalAlpha = 0.5
+  ctx.fillStyle = gradient
+  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
+  ctx.restore()
+}
+
+function addMeadowHighlights(ctx, island, grassPath) {
+  if (!island.highlights?.length) {
+    return
+  }
+
+  ctx.save()
+  ctx.clip(grassPath)
+  for (const highlight of island.highlights) {
+    const meadow = ctx.createRadialGradient(highlight.x, highlight.y, 0, highlight.x, highlight.y, highlight.radius)
+    meadow.addColorStop(0, hexToRgba(island.palette.highlight, 0.48))
+    meadow.addColorStop(1, 'rgba(255, 255, 255, 0)')
+    ctx.fillStyle = meadow
+    ctx.beginPath()
+    ctx.arc(highlight.x, highlight.y, highlight.radius, 0, TWO_PI)
+    ctx.fill()
+  }
+  ctx.restore()
+}
+
+function drawStreamsOnIsland(ctx, island, grassPath) {
+  if (!island.streams?.length) {
+    return
+  }
+
+  ctx.save()
+  ctx.clip(grassPath)
+  ctx.lineCap = 'round'
+  for (const stream of island.streams) {
+    ctx.strokeStyle = 'rgba(45, 136, 172, 0.78)'
+    ctx.lineWidth = stream.width
+    ctx.beginPath()
+    ctx.moveTo(stream.start.x, stream.start.y)
+    ctx.bezierCurveTo(stream.control1.x, stream.control1.y, stream.control2.x, stream.control2.y, stream.end.x, stream.end.y)
+    ctx.stroke()
+
+    ctx.strokeStyle = 'rgba(215, 242, 255, 0.75)'
+    ctx.lineWidth = stream.width * 0.45
+    ctx.beginPath()
+    ctx.moveTo(stream.start.x, stream.start.y)
+    ctx.bezierCurveTo(stream.control1.x, stream.control1.y, stream.control2.x, stream.control2.y, stream.end.x, stream.end.y)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+function drawCanopyBase(ctx, island, canopyPath) {
+  ctx.save()
+  ctx.fillStyle = hexToRgba(island.palette.canopy, 0.92)
+  ctx.fill(canopyPath)
+
+  ctx.clip(canopyPath)
+  const depth = ctx.createRadialGradient(0, 0, island.radius * 0.14, 0, 0, island.radius * 0.6)
+  depth.addColorStop(0, hexToRgba(island.palette.highlight, 0.35))
+  depth.addColorStop(1, 'rgba(0, 0, 0, 0.35)')
+  ctx.globalAlpha = 0.55
+  ctx.fillStyle = depth
+  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
+  ctx.restore()
+}
+
+function drawTreeClusters(ctx, island, canopyPath) {
+  if (!island.treeClusters?.length) {
+    return
+  }
+
+  ctx.save()
+  ctx.clip(canopyPath)
+  for (const cluster of island.treeClusters) {
+    for (const blob of cluster.blobs) {
+      ctx.fillStyle = 'rgba(15, 42, 28, 0.3)'
+      ctx.beginPath()
+      ctx.ellipse(blob.x + blob.size * 0.12, blob.y + blob.size * 0.4, blob.size * 1.05, blob.size * 0.62, 0, 0, TWO_PI)
+      ctx.fill()
+
+      const canopy = ctx.createRadialGradient(blob.x - blob.size * 0.3, blob.y - blob.size * 0.4, blob.size * 0.18, blob.x, blob.y, blob.size * 1.05)
+      canopy.addColorStop(0, hexToRgba(island.palette.highlight, 0.88))
+      canopy.addColorStop(0.55, hexToRgba(island.palette.canopy, 0.95))
+      canopy.addColorStop(1, 'rgba(14, 58, 36, 0.95)')
+      ctx.fillStyle = canopy
+      ctx.beginPath()
+      ctx.ellipse(blob.x, blob.y, blob.size * 1.08, blob.size, 0, 0, TWO_PI)
+      ctx.fill()
+    }
+  }
+  ctx.restore()
+}
+
+function drawCliffs(ctx, island, coastPath) {
+  if (!island.cliffs?.length) {
+    return
+  }
+
   ctx.save()
   ctx.clip(coastPath)
-  ctx.globalAlpha = 0.35
-  ctx.fillStyle = island.palette.cliffs
-  for (let i = -island.radius; i < island.radius; i += 18) {
-    ctx.fillRect(-island.radius, i, island.radius * 2, 6)
-  }
-  ctx.restore()
-}
+  ctx.lineCap = 'round'
+  for (const cliff of island.cliffs) {
+    const cliffPoints = island.coastline.filter((point) => isAngleBetween(point.angle, cliff.startAngle, cliff.endAngle))
+    if (cliffPoints.length < 2) {
+      continue
+    }
 
-function addCanopyHighlights(ctx, points, highlightColor) {
-  ctx.save()
-  ctx.fillStyle = highlightColor
-  for (let i = 0; i < points.length; i += 1) {
-    const a = points[i]
-    const b = points[(i + 1) % points.length]
-    const midX = (a.x + b.x) / 2
-    const midY = (a.y + b.y) / 2
-    ctx.fillRect(midX - 2, midY - 2, 4, 4)
-  }
-  ctx.restore()
-}
+    const interiorScale = Math.max(0.72, 0.9 - cliff.layers * 0.04)
+    const shadeColor = hexToRgba(island.palette.cliffs, Math.min(0.65, 0.24 + cliff.layers * 0.12))
+    const highlight = hexToRgba(island.palette.highlight, 0.35)
 
-function sprinkleDetails(ctx, island) {
-  ctx.save()
-  ctx.fillStyle = island.palette.highlight
-  island.detailPoints.forEach((detail) => {
-    const radius = island.radius * detail.distance
-    const x = Math.cos(detail.angle) * radius
-    const y = Math.sin(detail.angle) * radius
-    ctx.fillRect(x - 2, y - 2, 4, 4)
-  })
+    for (const point of cliffPoints) {
+      ctx.strokeStyle = shadeColor
+      ctx.lineWidth = 3.2 + cliff.layers * 0.25
+      ctx.beginPath()
+      ctx.moveTo(point.x, point.y)
+      ctx.lineTo(point.x * interiorScale, point.y * interiorScale)
+      ctx.stroke()
+    }
+
+    ctx.strokeStyle = highlight
+    ctx.lineWidth = 2.1
+    ctx.beginPath()
+    ctx.moveTo(cliffPoints[0].x * interiorScale, cliffPoints[0].y * interiorScale)
+    for (let i = 1; i < cliffPoints.length; i += 1) {
+      const point = cliffPoints[i]
+      ctx.lineTo(point.x * interiorScale, point.y * interiorScale)
+    }
+    ctx.stroke()
+  }
   ctx.restore()
 }
 
