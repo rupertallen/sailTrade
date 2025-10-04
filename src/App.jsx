@@ -109,6 +109,15 @@ function createInitialBoatState() {
     anchorState: 'stowed',
     anchorProgress: 0,
     wakeTimer: 0,
+    landStatus: {
+      zone: 'sea',
+      distance: Infinity,
+      signedDistance: Infinity,
+      normal: { x: 0, y: 0 },
+      nearestPoint: null,
+      islandId: null,
+      penetration: 0,
+    },
   }
 }
 
@@ -613,13 +622,31 @@ function App() {
       const proposedY = current.y + Math.sin(current.heading) * current.speed * dt
 
       const proposedBoat = { x: proposedX, y: proposedY, heading: current.heading }
-      const collision = detectCollision(proposedBoat, islands)
-      if (!collision) {
+      const proposedSeaState = getBoatSeaState(proposedBoat, islands)
+      if (proposedSeaState.zone === 'land') {
+        current.speed = Math.min(current.speed, 38)
+        if (proposedSeaState.penetration > 0) {
+          const pushBack = proposedSeaState.penetration + 1
+          current.x -= proposedSeaState.normal.x * pushBack
+          current.y -= proposedSeaState.normal.y * pushBack
+        }
+      } else {
         current.x = clamp(proposedX, 0, MAP_SIZE)
         current.y = clamp(proposedY, 0, MAP_SIZE)
-      } else {
-        current.speed = Math.min(current.speed, 38)
       }
+
+      current.x = clamp(current.x, 0, MAP_SIZE)
+      current.y = clamp(current.y, 0, MAP_SIZE)
+
+      let finalSeaState = getBoatSeaState(current, islands)
+      if (finalSeaState.zone === 'land' && finalSeaState.penetration > 0) {
+        const pushBack = finalSeaState.penetration + 1
+        current.x = clamp(current.x - finalSeaState.normal.x * pushBack, 0, MAP_SIZE)
+        current.y = clamp(current.y - finalSeaState.normal.y * pushBack, 0, MAP_SIZE)
+        finalSeaState = getBoatSeaState(current, islands)
+      }
+
+      current.landStatus = finalSeaState
 
       current.wakeTimer = (current.wakeTimer + dt * (0.8 + Math.min(current.speed / MAX_FORWARD_SPEED, 1) * 3)) % 1000
 
@@ -741,6 +768,14 @@ function App() {
   }
 
   const shipStatus = useMemo(() => {
+    if (boatState.landStatus?.zone === 'land') {
+      return 'Run aground'
+    }
+
+    if (boatState.landStatus?.zone === 'shore' && boatState.speed > 10) {
+      return 'Hugging the coast'
+    }
+
     if (boatState.anchorState === 'dropping') {
       return 'Dropping anchor'
     }
@@ -758,7 +793,34 @@ function App() {
     }
 
     return 'Idle'
-  }, [boatState.anchorState, boatState.speed])
+  }, [boatState.anchorState, boatState.landStatus, boatState.speed])
+
+  const landProximity = useMemo(() => {
+    const status = boatState.landStatus
+    if (!status) {
+      return { zone: 'Unknown', range: '—' }
+    }
+
+    if (status.zone === 'land') {
+      return {
+        zone: 'Grounded',
+        range: `${Math.round(status.penetration)} m inland`,
+      }
+    }
+
+    const distance = Number.isFinite(status.distance) ? Math.max(0, Math.round(status.distance)) : null
+    if (status.zone === 'shore') {
+      return {
+        zone: 'Coastal waters',
+        range: distance != null ? `${distance} m to land` : '—',
+      }
+    }
+
+    return {
+      zone: 'Open sea',
+      range: distance != null && distance < Infinity ? `${distance} m to land` : '—',
+    }
+  }, [boatState.landStatus])
 
   const speedKnots = Math.round(boatState.speed)
   const headingDegrees = Math.round(
@@ -853,6 +915,14 @@ function App() {
               <span className="ship-stat-label">Status</span>
               <span className="ship-stat-value">{shipStatus}</span>
             </div>
+            <div className="ship-stat">
+              <span className="ship-stat-label">Sea Zone</span>
+              <span className="ship-stat-value">{landProximity.zone}</span>
+            </div>
+            <div className="ship-stat">
+              <span className="ship-stat-label">Range</span>
+              <span className="ship-stat-value">{landProximity.range}</span>
+            </div>
           </div>
         </div>
         <div className={`mini-map-wrapper ${isMiniMapVisible ? 'is-visible' : ''}`}>
@@ -912,56 +982,165 @@ function isPointInsidePolygon(point, polygon) {
   return inside
 }
 
-function isPointNearPolygonEdge(point, polygon, threshold) {
-  const thresholdSq = threshold * threshold
+function getDistanceToPolygon(point, polygon) {
+  if (!polygon?.length) {
+    return {
+      distance: Infinity,
+      signedDistance: Infinity,
+      closestPoint: point,
+    }
+  }
+
+  let closestPoint = polygon[0]
+  let closestDistSq = Infinity
+
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
     const a = polygon[j]
     const b = polygon[i]
     const dx = b.x - a.x
     const dy = b.y - a.y
     const lengthSq = dx * dx + dy * dy
+
     let t = 0
     if (lengthSq > 0) {
       t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq
       t = Math.max(0, Math.min(1, t))
     }
+
     const closestX = a.x + dx * t
     const closestY = a.y + dy * t
     const deltaX = point.x - closestX
     const deltaY = point.y - closestY
     const distSq = deltaX * deltaX + deltaY * deltaY
-    if (distSq <= thresholdSq) {
-      return true
+
+    if (distSq < closestDistSq) {
+      closestDistSq = distSq
+      closestPoint = { x: closestX, y: closestY }
     }
   }
-  return false
+
+  const inside = isPointInsidePolygon(point, polygon)
+  const distance = Math.sqrt(closestDistSq)
+  return {
+    distance,
+    signedDistance: inside ? -distance : distance,
+    closestPoint,
+  }
 }
 
-function detectCollision(boat, islands) {
-  const samples = getBoatCollisionSamples(boat)
+function getPointLandProximity(point, islands) {
+  let best = {
+    zone: 'sea',
+    priority: -1,
+    distance: Infinity,
+    signedDistance: Infinity,
+    nearestPoint: null,
+    normal: { x: 0, y: 0 },
+    islandId: null,
+    penetration: 0,
+  }
 
   for (const island of islands) {
-    const dx = boat.x - island.x
-    const dy = boat.y - island.y
-    const limit = island.radius + MAX_BOAT_EXTENT
+    const localPoint = { x: point.x - island.x, y: point.y - island.y }
+    const approxDistanceFromCenter = Math.hypot(localPoint.x, localPoint.y) - island.radius
 
-    if (dx * dx + dy * dy > limit * limit) {
+    if (best.priority >= 0 && approxDistanceFromCenter > best.distance + MAX_BOAT_EXTENT) {
       continue
     }
 
-    for (const sample of samples) {
-      const localPoint = { x: sample.x - island.x, y: sample.y - island.y }
-      if (
-        isPointInsidePolygon(localPoint, island.coastline) ||
-        isPointInsidePolygon(localPoint, island.grass) ||
-        isPointNearPolygonEdge(localPoint, island.coastline, COLLISION_EDGE_THRESHOLD)
-      ) {
-        return true
+    const { distance, signedDistance, closestPoint } = getDistanceToPolygon(localPoint, island.coastline)
+    if (!Number.isFinite(distance)) {
+      continue
+    }
+
+    const worldClosest = { x: closestPoint.x + island.x, y: closestPoint.y + island.y }
+    let normalX = point.x - worldClosest.x
+    let normalY = point.y - worldClosest.y
+    let length = Math.hypot(normalX, normalY)
+    if (length === 0) {
+      normalX = localPoint.x
+      normalY = localPoint.y
+      length = Math.hypot(normalX, normalY) || 1
+    }
+    const normal = { x: normalX / length, y: normalY / length }
+
+    let zone = 'sea'
+    if (signedDistance <= 0) {
+      zone = 'land'
+    } else if (signedDistance <= COLLISION_EDGE_THRESHOLD) {
+      zone = 'shore'
+    }
+
+    const priority = zone === 'land' ? 2 : zone === 'shore' ? 1 : 0
+
+    if (
+      priority > best.priority ||
+      (priority === best.priority && distance < best.distance)
+    ) {
+      best = {
+        zone,
+        priority,
+        distance: Math.abs(signedDistance),
+        signedDistance,
+        nearestPoint: worldClosest,
+        normal,
+        islandId: island.id,
+        penetration: signedDistance < 0 ? -signedDistance : 0,
       }
     }
   }
 
-  return false
+  return best
+}
+
+function getBoatSeaState(boat, islands) {
+  const samples = getBoatCollisionSamples(boat)
+  let nearest = {
+    zone: 'sea',
+    distance: Infinity,
+    signedDistance: Infinity,
+    nearestPoint: null,
+    normal: { x: 0, y: 0 },
+    islandId: null,
+    penetration: 0,
+  }
+  let finalZone = 'sea'
+  let deepestPenetration = null
+
+  for (const sample of samples) {
+    const proximity = getPointLandProximity(sample, islands)
+    if (!proximity) {
+      continue
+    }
+
+    if (proximity.zone === 'land') {
+      if (!deepestPenetration || proximity.penetration > deepestPenetration.penetration) {
+        deepestPenetration = proximity
+      }
+    } else if (proximity.zone === 'shore' && finalZone !== 'land') {
+      finalZone = 'shore'
+    }
+
+    if (proximity.zone === 'land') {
+      finalZone = 'land'
+    }
+
+    const isCloser = proximity.distance < nearest.distance
+    if (isCloser || nearest.nearestPoint == null) {
+      nearest = { ...proximity }
+    }
+  }
+
+  const resolved = deepestPenetration ?? nearest
+  return {
+    zone: deepestPenetration ? 'land' : finalZone,
+    distance: resolved.distance,
+    signedDistance: deepestPenetration ? -deepestPenetration.penetration : resolved.signedDistance,
+    nearestPoint: resolved.nearestPoint,
+    normal: resolved.normal,
+    islandId: resolved.islandId,
+    penetration: deepestPenetration?.penetration ?? 0,
+  }
 }
 
 function updateWaves(waves, dt) {
