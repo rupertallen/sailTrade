@@ -1264,26 +1264,31 @@ function App() {
 
     const state = worldMapStateRef.current
 
-    const updateCanvasSize = () => {
-      const rect = container.getBoundingClientRect()
-      const cssWidth = rect.width
-      const cssHeight = rect.height
+    const updateCanvasSize = (contentSize) => {
+      const observedWidth = contentSize?.width
+      const observedHeight = contentSize?.height
+      const rawWidth = observedWidth ?? container.clientWidth
+      const rawHeight = observedHeight ?? container.clientHeight
+      const cssWidth = Math.max(0, Math.round(rawWidth))
+      const cssHeight = Math.max(0, Math.round(rawHeight))
 
       if (cssWidth <= 0 || cssHeight <= 0) {
         return
       }
 
       const dpr = window.devicePixelRatio || 1
-      canvas.width = cssWidth * dpr
-      canvas.height = cssHeight * dpr
+      canvas.width = Math.max(1, Math.round(cssWidth * dpr))
+      canvas.height = Math.max(1, Math.round(cssHeight * dpr))
       canvas.style.width = `${cssWidth}px`
       canvas.style.height = `${cssHeight}px`
 
       const padding = 80
       const paddedWidth = Math.max(0, cssWidth - padding)
       const paddedHeight = Math.max(0, cssHeight - padding)
-      const widthScale = paddedWidth > 0 ? paddedWidth / MAP_SIZE : 0
-      const heightScale = paddedHeight > 0 ? paddedHeight / MAP_SIZE : 0
+      const edgeInset = 240
+      const effectiveMapSize = Math.max(1, MAP_SIZE - edgeInset * 2)
+      const widthScale = paddedWidth > 0 ? paddedWidth / effectiveMapSize : 0
+      const heightScale = paddedHeight > 0 ? paddedHeight / effectiveMapSize : 0
       let fitScale = Math.min(widthScale, heightScale)
       if (!Number.isFinite(fitScale) || fitScale <= 0) {
         fitScale = Math.max(widthScale, heightScale)
@@ -1305,8 +1310,12 @@ function App() {
       drawWorldMap(canvas, state, boatRef.current, islands)
     }
 
-    const resizeObserver = new ResizeObserver(() => {
-      updateCanvasSize()
+    const resizeObserver = new ResizeObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.target === container) {
+          updateCanvasSize(entry.contentRect)
+        }
+      })
     })
     resizeObserver.observe(container)
     updateCanvasSize()
