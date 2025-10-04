@@ -64,6 +64,85 @@ const MINIMAP_WORLD_RADIUS = 2200
 const COLLISION_EDGE_THRESHOLD = 10
 const islandTextureCache = new WeakMap()
 
+const NAME_SYLLABLE_PREFIXES = [
+  'Ash',
+  'Beck',
+  'Black',
+  'Bracken',
+  'Bright',
+  'Cinder',
+  'Cliff',
+  'Crown',
+  'Drift',
+  'Eagle',
+  'Fair',
+  'Fog',
+  'Fox',
+  'Gale',
+  'Glen',
+  'Harbor',
+  'High',
+  'Iron',
+  'King',
+  'Lark',
+  'Maple',
+  'Oak',
+  'Port',
+  'Raven',
+  'Red',
+  'Salt',
+  'Sea',
+  'Silver',
+  'Storm',
+  'Summer',
+  'Whit',
+  'Wind',
+  'Winter',
+]
+
+const NAME_SYLLABLE_SUFFIXES = [
+  'bay',
+  'bourne',
+  'cliff',
+  'cove',
+  'ford',
+  'gate',
+  'haven',
+  'holm',
+  'mere',
+  'mist',
+  'moor',
+  'point',
+  'port',
+  'reach',
+  'rest',
+  'rock',
+  'shade',
+  'shore',
+  'stead',
+  'ton',
+  'view',
+  'watch',
+  'wick',
+]
+
+const NAME_SECOND_WORDS = [
+  'Cove',
+  'Harbor',
+  'Haven',
+  'Isle',
+  'Island',
+  'Key',
+  'Lagoon',
+  'Point',
+  'Reach',
+  'Sound',
+  'Spire',
+  'Watch',
+]
+
+const NAME_DESCRIPTORS = ['Isle', 'Island', 'Atoll', 'Cay']
+
 function generateRandomSeed() {
   if (typeof crypto !== 'undefined' && crypto?.getRandomValues) {
     const array = crypto.getRandomValues(new Uint32Array(2))
@@ -509,8 +588,50 @@ function generateMeadowHighlights(grassPoints, radius, random = Math.random) {
   return highlights
 }
 
+function capitalize(word) {
+  if (!word) {
+    return ''
+  }
+  return word.charAt(0).toUpperCase() + word.slice(1)
+}
+
+function generateIslandName(random = Math.random, usedNames = new Set()) {
+  let attempt = 0
+  while (attempt < 40) {
+    attempt += 1
+
+    const pattern = random()
+    let candidate = ''
+
+    if (pattern < 0.34) {
+      const prefix = NAME_SYLLABLE_PREFIXES[Math.floor(random() * NAME_SYLLABLE_PREFIXES.length)]
+      const suffix = NAME_SYLLABLE_SUFFIXES[Math.floor(random() * NAME_SYLLABLE_SUFFIXES.length)]
+      const descriptor = NAME_DESCRIPTORS[Math.floor(random() * NAME_DESCRIPTORS.length)]
+      candidate = `${capitalize(prefix + suffix)} ${descriptor}`
+    } else if (pattern < 0.68) {
+      const first = NAME_SYLLABLE_PREFIXES[Math.floor(random() * NAME_SYLLABLE_PREFIXES.length)]
+      const second = NAME_SECOND_WORDS[Math.floor(random() * NAME_SECOND_WORDS.length)]
+      candidate = `${capitalize(first)} ${second}`
+    } else {
+      const prefix = NAME_SYLLABLE_PREFIXES[Math.floor(random() * NAME_SYLLABLE_PREFIXES.length)]
+      const suffix = NAME_SYLLABLE_SUFFIXES[Math.floor(random() * NAME_SYLLABLE_SUFFIXES.length)]
+      candidate = capitalize(prefix + suffix)
+    }
+
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate)
+      return candidate
+    }
+  }
+
+  const fallback = `Isle ${usedNames.size + 1}`
+  usedNames.add(fallback)
+  return fallback
+}
+
 function generateIslands(count, random = Math.random) {
   const islands = []
+  const usedNames = new Set()
   let attempts = 0
   while (islands.length < count && attempts < count * 60) {
     attempts += 1
@@ -534,6 +655,7 @@ function generateIslands(count, random = Math.random) {
     const canopy = createInnerRing(coastline, 0.58, 0.18, random)
 
     const palette = pickPalette(random)
+    const name = generateIslandName(random, usedNames)
     islands.push({
       id: `island-${islands.length}`,
       x,
@@ -556,6 +678,7 @@ function generateIslands(count, random = Math.random) {
       treeClusters: [],
       streams: generateStreams(coastline, radius, random),
       highlights: generateMeadowHighlights(grass, radius, random),
+      name,
     })
   }
 
@@ -621,6 +744,8 @@ function useWindowSize() {
 function App() {
   const canvasRef = useRef(null)
   const miniMapRef = useRef(null)
+  const worldMapWrapperRef = useRef(null)
+  const worldMapCanvasRef = useRef(null)
   const pressedKeys = useRef(new Set())
   const repairClicksRef = useRef(0)
   const [seed, setSeed] = useState(() => generateRandomSeed())
@@ -628,9 +753,23 @@ function App() {
   const [copyStatus, setCopyStatus] = useState('')
   const [activeMenu, setActiveMenu] = useState(null)
   const [isMiniMapVisible, setMiniMapVisible] = useState(false)
+  const [isWorldMapVisible, setWorldMapVisible] = useState(false)
   const [isWeatherVisible, setWeatherVisible] = useState(true)
   const [isWeatherEnabled, setWeatherEnabled] = useState(true)
   const copyTimeoutRef = useRef(null)
+  const worldMapStateRef = useRef({
+    scale: 1,
+    centerX: MAP_SIZE / 2,
+    centerY: MAP_SIZE / 2,
+    minScale: 0.01,
+    maxScale: 1.2,
+    baseScale: 0.05,
+    isPanning: false,
+    pointerId: null,
+    lastX: 0,
+    lastY: 0,
+  })
+  const worldMapInitializedRef = useRef(false)
 
   const seedData = useMemo(() => {
     const random = createSeededRng(seed)
@@ -676,8 +815,31 @@ function App() {
   }, [seed])
 
   useEffect(() => {
+    if (isWorldMapVisible) {
+      setMiniMapVisible(false)
+    } else {
+      worldMapInitializedRef.current = false
+    }
+  }, [isWorldMapVisible])
+
+  useEffect(() => {
+    worldMapInitializedRef.current = false
+  }, [islands])
+
+  useEffect(() => {
     const handleKeyDown = (event) => {
       const key = event.key.toLowerCase()
+      if (key === 'm') {
+        event.preventDefault()
+        setWorldMapVisible((value) => {
+          const next = !value
+          if (next) {
+            setMiniMapVisible(false)
+          }
+          return next
+        })
+        return
+      }
       if (Object.values(controlKeys).flat().includes(key)) {
         event.preventDefault()
         pressedKeys.current.add(key)
@@ -979,6 +1141,13 @@ function App() {
         }
       }
 
+      if (isWorldMapVisible) {
+        const worldMapCanvasCurrent = worldMapCanvasRef.current
+        if (worldMapCanvasCurrent) {
+          drawWorldMap(worldMapCanvasCurrent, worldMapStateRef.current, boat, islands)
+        }
+      }
+
       animationFrame = requestAnimationFrame(render)
     }
 
@@ -998,7 +1167,14 @@ function App() {
     return () => {
       cancelAnimationFrame(animationFrame)
     }
-  }, [height, width, islands, isMiniMapVisible, isWeatherEnabled])
+  }, [
+    height,
+    width,
+    islands,
+    isMiniMapVisible,
+    isWeatherEnabled,
+    isWorldMapVisible,
+  ])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -1074,6 +1250,157 @@ function App() {
     miniMapCanvas.style.width = `${size}px`
     miniMapCanvas.style.height = `${size}px`
   }, [width, height])
+
+  useEffect(() => {
+    if (!isWorldMapVisible) {
+      return undefined
+    }
+
+    const container = worldMapWrapperRef.current
+    const canvas = worldMapCanvasRef.current
+    if (!container || !canvas) {
+      return undefined
+    }
+
+    const state = worldMapStateRef.current
+
+    const updateCanvasSize = () => {
+      const rect = container.getBoundingClientRect()
+      const cssWidth = rect.width
+      const cssHeight = rect.height
+
+      if (cssWidth <= 0 || cssHeight <= 0) {
+        return
+      }
+
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = cssWidth * dpr
+      canvas.height = cssHeight * dpr
+      canvas.style.width = `${cssWidth}px`
+      canvas.style.height = `${cssHeight}px`
+
+      const padding = 80
+      const paddedWidth = Math.max(0, cssWidth - padding)
+      const paddedHeight = Math.max(0, cssHeight - padding)
+      const widthScale = paddedWidth > 0 ? paddedWidth / MAP_SIZE : 0
+      const heightScale = paddedHeight > 0 ? paddedHeight / MAP_SIZE : 0
+      let fitScale = Math.min(widthScale, heightScale)
+      if (!Number.isFinite(fitScale) || fitScale <= 0) {
+        fitScale = Math.max(widthScale, heightScale)
+      }
+      const defaultScale = Math.max(0.02, fitScale || 0.02)
+
+      state.baseScale = defaultScale
+      state.minScale = defaultScale * 0.6
+      state.maxScale = defaultScale * 12
+
+      if (!worldMapInitializedRef.current) {
+        state.scale = defaultScale
+        state.centerX = MAP_SIZE / 2
+        state.centerY = MAP_SIZE / 2
+        worldMapInitializedRef.current = true
+      }
+
+      clampWorldMapView(state, cssWidth, cssHeight)
+      drawWorldMap(canvas, state, boatRef.current, islands)
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateCanvasSize()
+    })
+    resizeObserver.observe(container)
+    updateCanvasSize()
+
+    const handlePointerDown = (event) => {
+      if (event.button !== 0) {
+        return
+      }
+      state.isPanning = true
+      state.pointerId = event.pointerId
+      state.lastX = event.clientX
+      state.lastY = event.clientY
+      canvas.classList.add('is-panning')
+      canvas.setPointerCapture(event.pointerId)
+    }
+
+    const handlePointerMove = (event) => {
+      if (!state.isPanning || event.pointerId !== state.pointerId) {
+        return
+      }
+
+      const dx = event.clientX - state.lastX
+      const dy = event.clientY - state.lastY
+      state.lastX = event.clientX
+      state.lastY = event.clientY
+      state.centerX -= dx / state.scale
+      state.centerY -= dy / state.scale
+      const rect = canvas.getBoundingClientRect()
+      clampWorldMapView(state, rect.width, rect.height)
+      drawWorldMap(canvas, state, boatRef.current, islands)
+    }
+
+    const endPan = (event) => {
+      if (state.pointerId !== event.pointerId) {
+        return
+      }
+      state.isPanning = false
+      state.pointerId = null
+      canvas.classList.remove('is-panning')
+      if (typeof canvas.hasPointerCapture === 'function') {
+        if (canvas.hasPointerCapture(event.pointerId)) {
+          canvas.releasePointerCapture(event.pointerId)
+        }
+      } else {
+        canvas.releasePointerCapture?.(event.pointerId)
+      }
+    }
+
+    const handleWheel = (event) => {
+      event.preventDefault()
+      const rect = canvas.getBoundingClientRect()
+      const dpr = window.devicePixelRatio || 1
+      const width = canvas.width / dpr
+      const height = canvas.height / dpr
+      const offsetX = event.clientX - rect.left
+      const offsetY = event.clientY - rect.top
+
+      const zoomChange = Math.pow(1.1, -event.deltaY / 120)
+      const nextScale = clamp(state.scale * zoomChange, state.minScale, state.maxScale)
+      if (nextScale === state.scale) {
+        return
+      }
+
+      const worldX = state.centerX + (offsetX - width / 2) / state.scale
+      const worldY = state.centerY + (offsetY - height / 2) / state.scale
+
+      state.scale = nextScale
+      state.centerX = worldX - (offsetX - width / 2) / state.scale
+      state.centerY = worldY - (offsetY - height / 2) / state.scale
+
+      clampWorldMapView(state, rect.width, rect.height)
+      drawWorldMap(canvas, state, boatRef.current, islands)
+    }
+
+    canvas.addEventListener('pointerdown', handlePointerDown)
+    canvas.addEventListener('pointermove', handlePointerMove)
+    canvas.addEventListener('pointerup', endPan)
+    canvas.addEventListener('pointercancel', endPan)
+    canvas.addEventListener('pointerleave', endPan)
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+
+    return () => {
+      resizeObserver.disconnect()
+      canvas.classList.remove('is-panning')
+      canvas.removeEventListener('pointerdown', handlePointerDown)
+      canvas.removeEventListener('pointermove', handlePointerMove)
+      canvas.removeEventListener('pointerup', endPan)
+      canvas.removeEventListener('pointercancel', endPan)
+      canvas.removeEventListener('pointerleave', endPan)
+      canvas.removeEventListener('wheel', handleWheel)
+      state.isPanning = false
+      state.pointerId = null
+    }
+  }, [boatRef, islands, isWorldMapVisible])
 
   const handleSeedSubmit = (event) => {
     event.preventDefault()
@@ -1309,8 +1636,31 @@ function App() {
               )}
               <button
                 type="button"
+                className={`menu-toggle-button ${isWorldMapVisible ? 'is-active' : ''}`}
+                onClick={() =>
+                  setWorldMapVisible((value) => {
+                    const next = !value
+                    if (next) {
+                      setMiniMapVisible(false)
+                    }
+                    return next
+                  })
+                }
+              >
+                Map
+              </button>
+              <button
+                type="button"
                 className={`menu-toggle-button ${isMiniMapVisible ? 'is-active' : ''}`}
-                onClick={() => setMiniMapVisible((value) => !value)}
+                onClick={() =>
+                  setMiniMapVisible((value) => {
+                    const next = !value
+                    if (next) {
+                      setWorldMapVisible(false)
+                    }
+                    return next
+                  })
+                }
               >
                 Mini Map
               </button>
@@ -1379,6 +1729,28 @@ function App() {
             </div>
           )}
         </div>
+        {isWorldMapVisible && (
+          <div className="world-map-wrapper">
+            <div className="world-map-panel glass-panel hud-panel">
+              <div className="world-map-toolbar">
+                <div className="world-map-title">Sea Chart</div>
+                <div className="world-map-actions">
+                  <span className="world-map-hint">Drag to pan · Scroll to zoom · Press M to close</span>
+                  <button
+                    type="button"
+                    className="world-map-close"
+                    onClick={() => setWorldMapVisible(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div ref={worldMapWrapperRef} className="world-map-canvas-container">
+                <canvas ref={worldMapCanvasRef} className="world-map-canvas" />
+              </div>
+            </div>
+          </div>
+        )}
         <div className="bottom-panels">
           {isWeatherEnabled && isWeatherVisible && (
             <div className="weather-panel glass-panel hud-panel">
@@ -1887,6 +2259,180 @@ function drawMiniMap(ctx, boat, islands) {
   ctx.lineWidth = 1.8
   ctx.stroke()
   ctx.restore()
+
+  ctx.restore()
+}
+
+function clampWorldMapView(state, width, height) {
+  if (!state) {
+    return
+  }
+
+  const scale = Math.max(state.scale || 0.0001, 0.0001)
+  const halfWidthWorldRaw = width > 0 ? width / (2 * scale) : MAP_SIZE / 2
+  const halfHeightWorldRaw = height > 0 ? height / (2 * scale) : MAP_SIZE / 2
+  const maxHalfWidth = MAP_SIZE / 2
+  const maxHalfHeight = MAP_SIZE / 2
+  const halfWidthWorld = Math.min(Math.max(halfWidthWorldRaw, 0), maxHalfWidth)
+  const halfHeightWorld = Math.min(Math.max(halfHeightWorldRaw, 0), maxHalfHeight)
+  const minX = halfWidthWorld > 0 ? halfWidthWorld : maxHalfWidth
+  const maxX = MAP_SIZE - minX
+  const minY = halfHeightWorld > 0 ? halfHeightWorld : maxHalfHeight
+  const maxY = MAP_SIZE - minY
+
+  state.centerX = clamp(state.centerX ?? MAP_SIZE / 2, minX, maxX)
+  state.centerY = clamp(state.centerY ?? MAP_SIZE / 2, minY, maxY)
+}
+
+function drawWorldMap(canvas, state, boat, islands) {
+  if (!canvas || !state) {
+    return
+  }
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    return
+  }
+
+  const dpr = window.devicePixelRatio || 1
+  const width = canvas.width / dpr
+  const height = canvas.height / dpr
+
+  ctx.save()
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, width, height)
+
+  const background = ctx.createLinearGradient(0, 0, 0, height)
+  background.addColorStop(0, 'rgba(8, 52, 72, 0.95)')
+  background.addColorStop(1, 'rgba(4, 28, 42, 0.95)')
+  ctx.fillStyle = background
+  ctx.fillRect(0, 0, width, height)
+
+  const scale = Math.max(state.scale || 0.02, 0.0001)
+  const centerX = state.centerX ?? MAP_SIZE / 2
+  const centerY = state.centerY ?? MAP_SIZE / 2
+
+  ctx.save()
+  const translateX = width / 2 - centerX * scale
+  const translateY = height / 2 - centerY * scale
+  ctx.translate(translateX, translateY)
+  ctx.scale(scale, scale)
+
+  ctx.fillStyle = 'rgba(9, 58, 80, 0.92)'
+  ctx.fillRect(0, 0, MAP_SIZE, MAP_SIZE)
+
+  ctx.strokeStyle = 'rgba(188, 224, 255, 0.16)'
+  ctx.lineWidth = Math.max(1 / scale, 0.6 / scale)
+  ctx.strokeRect(0, 0, MAP_SIZE, MAP_SIZE)
+
+  const traceRing = (points) => {
+    if (!points?.length) {
+      return false
+    }
+    ctx.beginPath()
+    ctx.moveTo(points[0].x, points[0].y)
+    for (let i = 1; i < points.length; i += 1) {
+      const point = points[i]
+      ctx.lineTo(point.x, point.y)
+    }
+    ctx.closePath()
+    return true
+  }
+
+  for (const island of islands) {
+    ctx.save()
+    ctx.translate(island.x, island.y)
+
+    if (traceRing(island.coastline)) {
+      ctx.globalAlpha = 0.92
+      ctx.fillStyle = hexToRgba(island.palette.shore, 0.86)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.beach)) {
+      ctx.globalAlpha = 0.95
+      ctx.fillStyle = hexToRgba(island.palette.beach, 0.94)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.grass)) {
+      ctx.globalAlpha = 0.9
+      ctx.fillStyle = hexToRgba(island.palette.grass, 0.92)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.canopy)) {
+      ctx.globalAlpha = 0.85
+      ctx.fillStyle = hexToRgba(island.palette.canopy, 0.88)
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    if (traceRing(island.coastline)) {
+      ctx.strokeStyle = hexToRgba(island.palette.shore, 0.78)
+      ctx.lineWidth = Math.max(2.4 / scale, 1.2 / scale)
+      ctx.stroke()
+    }
+
+    ctx.restore()
+  }
+
+  if (boat) {
+    ctx.save()
+    ctx.translate(boat.x, boat.y)
+    ctx.rotate(boat.heading ?? 0)
+    const hullLength = 140
+    const hullWidth = 68
+    ctx.fillStyle = '#ffe8a6'
+    ctx.beginPath()
+    ctx.moveTo(hullLength * 0.5, 0)
+    ctx.lineTo(-hullLength * 0.4, hullWidth * 0.45)
+    ctx.lineTo(-hullLength * 0.4, -hullWidth * 0.45)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(12, 32, 46, 0.82)'
+    ctx.lineWidth = Math.max(3.2 / scale, 1.6 / scale)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(0, 0, Math.max(12, 22 / scale), 0, TWO_PI)
+    ctx.fillStyle = 'rgba(255, 231, 189, 0.65)'
+    ctx.fill()
+    ctx.restore()
+  }
+
+  ctx.restore()
+
+  const toScreen = (x, y) => ({
+    x: (x - centerX) * scale + width / 2,
+    y: (y - centerY) * scale + height / 2,
+  })
+
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineJoin = 'round'
+
+  for (const island of islands) {
+    const screen = toScreen(island.x, island.y)
+    if (screen.x < -160 || screen.x > width + 160 || screen.y < -120 || screen.y > height + 160) {
+      continue
+    }
+
+    const fontSize = clamp(14 + (island.radius ?? 280) * scale * 0.22, 14, 30)
+    ctx.font = `${Math.round(fontSize)}px 'Cinzel', 'Georgia', serif`
+    const strokeWidth = Math.max(2, fontSize * 0.2)
+    ctx.lineWidth = strokeWidth
+    ctx.strokeStyle = 'rgba(6, 24, 34, 0.7)'
+    ctx.fillStyle = '#fff2cf'
+    ctx.strokeText(island.name ?? 'Isle', screen.x, screen.y)
+    ctx.fillText(island.name ?? 'Isle', screen.x, screen.y)
+  }
+
+  ctx.strokeStyle = 'rgba(224, 244, 255, 0.2)'
+  ctx.lineWidth = 2
+  ctx.strokeRect(2, 2, width - 4, height - 4)
 
   ctx.restore()
 }
