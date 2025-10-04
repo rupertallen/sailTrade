@@ -261,6 +261,15 @@
   text-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
 }
 
+.ship-stat-sub {
+  display: inline-block;
+  margin-left: 0.35rem;
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(240, 245, 248, 0.7);
+}
+
 @media (max-width: 900px) {
   .ui-layer {
     padding: 1.2rem 1.2rem 1.6rem;
