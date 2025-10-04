@@ -196,7 +196,9 @@
 .mini-map-wrapper {
   position: absolute;
   right: 2.5rem;
-  bottom: calc(2.5rem + clamp(5rem, 16vh, 7.5rem));
+  --mini-map-panel-height: clamp(5rem, 16vh, 7.5rem);
+  --mini-map-bottom-base: calc(2.5rem + var(--mini-map-panel-height));
+  bottom: calc(var(--mini-map-bottom-base) + var(--mini-map-bottom-extra, 0px));
   opacity: 0;
   transform: scale(0.95);
   transition: opacity 0.25s ease, transform 0.25s ease;
@@ -217,9 +219,15 @@
   background: rgba(6, 40, 58, 0.8);
 }
 
-.bottom-menu {
+.bottom-panels {
   align-self: center;
   width: min(100%, 1100px);
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.hud-panel {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -227,41 +235,47 @@
   padding: 0.85rem 1.75rem;
 }
 
-.ship-title {
+.ship-title,
+.weather-title {
   font-size: 0.75rem;
   letter-spacing: 0.28em;
   text-transform: uppercase;
   color: rgba(255, 231, 189, 0.95);
 }
 
-.ship-stats {
+.ship-stats,
+.weather-stats {
   display: flex;
   gap: 1.75rem;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
-.ship-stat {
+.ship-stat,
+.weather-stat {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
 }
 
-.ship-stat-label {
+.ship-stat-label,
+.weather-stat-label {
   font-size: 0.65rem;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: rgba(240, 245, 248, 0.65);
 }
 
-.ship-stat-value {
+.ship-stat-value,
+.weather-stat-value {
   font-size: 1.1rem;
   font-weight: 600;
   color: #fef7dc;
   text-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
 }
 
-.ship-stat-sub {
+.ship-stat-sub,
+.weather-stat-sub {
   display: inline-block;
   margin-left: 0.35rem;
   font-size: 0.65rem;
@@ -276,7 +290,8 @@
   gap: 0.75rem;
 }
 
-.wind-value .ship-stat-sub {
+.wind-value .ship-stat-sub,
+.wind-value .weather-stat-sub {
   margin-left: 0;
 }
 
@@ -370,13 +385,14 @@
     flex: 1 1 160px;
   }
 
-  .bottom-menu {
+  .hud-panel {
     padding: 0.75rem 1.25rem;
   }
 
   .mini-map-wrapper {
     right: 1.9rem;
-    bottom: calc(1.9rem + clamp(4.5rem, 18vh, 6.5rem));
+    --mini-map-panel-height: clamp(4.5rem, 18vh, 6.5rem);
+    --mini-map-bottom-base: calc(1.9rem + var(--mini-map-panel-height));
   }
 }
 
