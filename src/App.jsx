@@ -4,6 +4,8 @@ import './App.css'
 const MAP_SIZE = 10000
 const ISLAND_COUNT = 16
 const MIN_ISLAND_GAP = 900
+const MAP_EDGE_CLEARANCE = 900
+const DOCKING_DISTANCE = 420
 const TWO_PI = Math.PI * 2
 const MAX_FORWARD_SPEED = 260 // world units per second
 const ACCELERATION = 140
@@ -143,6 +145,46 @@ const NAME_SECOND_WORDS = [
 
 const NAME_DESCRIPTORS = ['Isle', 'Island', 'Atoll', 'Cay']
 
+const SETTLEMENT_SIZE_OPTIONS = [
+  {
+    id: 'village',
+    label: 'Seaside Village',
+    minRadius: 560,
+    populationRange: [260, 640],
+    buildingRange: [4, 6],
+    dockLengthMultiplier: 0.52,
+  },
+  {
+    id: 'harbor-town',
+    label: 'Harbor Town',
+    minRadius: 680,
+    populationRange: [720, 1480],
+    buildingRange: [6, 9],
+    dockLengthMultiplier: 0.6,
+  },
+  {
+    id: 'port-town',
+    label: 'Port Town',
+    minRadius: 780,
+    populationRange: [1600, 3200],
+    buildingRange: [9, 13],
+    dockLengthMultiplier: 0.68,
+  },
+]
+
+const SETTLEMENT_NAME_SUFFIXES = [
+  'Harbor',
+  'Landing',
+  'Quay',
+  'Wharf',
+  'Bay',
+  'Haven',
+  'Port',
+  'Harbour',
+]
+
+const SETTLEMENT_MARKET_THEMES = ['Spice', 'Timber', 'Fish', 'Sails', 'Charts', 'Trade']
+
 function generateRandomSeed() {
   if (typeof crypto !== 'undefined' && crypto?.getRandomValues) {
     const array = crypto.getRandomValues(new Uint32Array(2))
@@ -239,6 +281,7 @@ function createInitialBoatState() {
       nearestPoint: null,
       islandId: null,
       penetration: 0,
+      structureType: null,
     },
     wind: {
       direction: 0,
@@ -247,6 +290,7 @@ function createInitialBoatState() {
       multiplier: 1,
       isTacking: false,
     },
+    dockedSettlementId: null,
   }
 }
 
@@ -629,15 +673,247 @@ function generateIslandName(random = Math.random, usedNames = new Set()) {
   return fallback
 }
 
+function generateSettlementName(random, usedNames, islandName) {
+  let attempt = 0
+  const baseName = islandName?.split(' ')[0]
+
+  while (attempt < 60) {
+    attempt += 1
+    const pattern = random()
+    const suffix = SETTLEMENT_NAME_SUFFIXES[Math.floor(random() * SETTLEMENT_NAME_SUFFIXES.length)]
+    let candidate
+
+    if (pattern < 0.45 && baseName) {
+      candidate = `${baseName} ${suffix}`
+    } else if (pattern < 0.78) {
+      const prefix = NAME_SYLLABLE_PREFIXES[Math.floor(random() * NAME_SYLLABLE_PREFIXES.length)]
+      candidate = `${capitalize(prefix)} ${suffix}`
+    } else {
+      const compositePrefix = NAME_SYLLABLE_PREFIXES[Math.floor(random() * NAME_SYLLABLE_PREFIXES.length)]
+      const compositeSuffix = NAME_SYLLABLE_SUFFIXES[Math.floor(random() * NAME_SYLLABLE_SUFFIXES.length)]
+      candidate = `Port ${capitalize(compositePrefix + compositeSuffix)}`
+    }
+
+    if (pattern > 0.88) {
+      const theme = SETTLEMENT_MARKET_THEMES[Math.floor(random() * SETTLEMENT_MARKET_THEMES.length)]
+      candidate = `${candidate} ${theme}`
+    }
+
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate)
+      return candidate
+    }
+  }
+
+  const fallback = `Harbor ${usedNames.size + 1}`
+  usedNames.add(fallback)
+  return fallback
+}
+
+function findPointClosestToAngle(points, angle) {
+  if (!points?.length) {
+    return { angle, radius: 0, x: Math.cos(angle), y: Math.sin(angle) }
+  }
+
+  let best = points[0]
+  let smallest = Math.abs(shortestAngleDiff(angle, best.angle))
+  for (let i = 1; i < points.length; i += 1) {
+    const point = points[i]
+    const diff = Math.abs(shortestAngleDiff(angle, point.angle))
+    if (diff < smallest) {
+      smallest = diff
+      best = point
+    }
+  }
+  return best
+}
+
+function createDockStructure(angle, coastlinePoint, radius, sizeProfile, random) {
+  const direction = { x: Math.cos(angle), y: Math.sin(angle) }
+  const length = radius * (sizeProfile.dockLengthMultiplier + random() * 0.12)
+  const width = radius * 0.12 + 40 + random() * 40
+  const retract = Math.min(radius * 0.08, 60)
+  const landwardBase = {
+    x: coastlinePoint.x - direction.x * retract,
+    y: coastlinePoint.y - direction.y * retract,
+  }
+  const outerEnd = {
+    x: landwardBase.x + direction.x * length,
+    y: landwardBase.y + direction.y * length,
+  }
+  const halfWidth = width / 2
+  const perpendicular = { x: -direction.y, y: direction.x }
+  const polygon = [
+    {
+      x: landwardBase.x + perpendicular.x * halfWidth,
+      y: landwardBase.y + perpendicular.y * halfWidth,
+    },
+    {
+      x: landwardBase.x - perpendicular.x * halfWidth,
+      y: landwardBase.y - perpendicular.y * halfWidth,
+    },
+    {
+      x: outerEnd.x - perpendicular.x * halfWidth,
+      y: outerEnd.y - perpendicular.y * halfWidth,
+    },
+    {
+      x: outerEnd.x + perpendicular.x * halfWidth,
+      y: outerEnd.y + perpendicular.y * halfWidth,
+    },
+  ]
+
+  const berthPoint = {
+    x: landwardBase.x + direction.x * (length * 0.78),
+    y: landwardBase.y + direction.y * (length * 0.78),
+  }
+
+  const approachPoint = {
+    x: outerEnd.x + direction.x * 180,
+    y: outerEnd.y + direction.y * 180,
+  }
+
+  return {
+    polygon,
+    direction,
+    landwardBase,
+    berthPoint,
+    approachPoint,
+    width,
+    length,
+  }
+}
+
+function generateSettlementForIsland(island, random, usedNames) {
+  const candidates = SETTLEMENT_SIZE_OPTIONS.filter((option) => island.radius >= option.minRadius)
+  if (!candidates.length) {
+    return null
+  }
+
+  const spawnChance = Math.min(0.82, 0.45 + (island.radius - candidates[0].minRadius) / 1400)
+  if (random() > spawnChance) {
+    return null
+  }
+
+  const choice = candidates[Math.floor(random() * candidates.length)]
+  const placementAngle = random() * TWO_PI
+  const coastlinePoint = findPointClosestToAngle(island.coastline, placementAngle)
+  const dock = createDockStructure(placementAngle, coastlinePoint, island.radius, choice, random)
+
+  const settlementRadius = coastlinePoint.radius * 0.62
+  const center = {
+    x: Math.cos(placementAngle) * settlementRadius,
+    y: Math.sin(placementAngle) * settlementRadius,
+  }
+
+  const plazaRadius = 60 + island.radius * 0.08
+  const roadEnd = {
+    x: dock.landwardBase.x + dock.direction.x * 24,
+    y: dock.landwardBase.y + dock.direction.y * 24,
+  }
+
+  const buildingCountRange = choice.buildingRange
+  const buildingCount = buildingCountRange[0] + Math.floor(random() * (buildingCountRange[1] - buildingCountRange[0] + 1))
+  const buildings = []
+  const maxPerRow = 3 + (choice.id === 'port-town' ? 1 : 0)
+  const spacing = 70 + island.radius * 0.05
+  const direction = dock.direction
+  const perpendicular = { x: -direction.y, y: direction.x }
+
+  for (let i = 0; i < buildingCount; i += 1) {
+    const row = Math.floor(i / maxPerRow)
+    const column = i % maxPerRow
+    const offsetFromCenter = (column - (maxPerRow - 1) / 2) * spacing
+    const depth = 70 + random() * 55 + island.radius * 0.04
+    const width = 68 + random() * 40 + island.radius * 0.03
+    const rowSpacing = depth * 1.05 + 28
+    const anchor = {
+      x: center.x - direction.x * (row * rowSpacing),
+      y: center.y - direction.y * (row * rowSpacing),
+    }
+    const frontCenter = {
+      x: anchor.x + perpendicular.x * offsetFromCenter,
+      y: anchor.y + perpendicular.y * offsetFromCenter,
+    }
+    const halfWidth = width / 2
+    const forward = { x: -direction.x * depth, y: -direction.y * depth }
+    const left = { x: perpendicular.x * halfWidth, y: perpendicular.y * halfWidth }
+    const right = { x: -perpendicular.x * halfWidth, y: -perpendicular.y * halfWidth }
+
+    const frontLeft = { x: frontCenter.x + left.x, y: frontCenter.y + left.y }
+    const frontRight = { x: frontCenter.x + right.x, y: frontCenter.y + right.y }
+    const backLeft = { x: frontLeft.x + forward.x, y: frontLeft.y + forward.y }
+    const backRight = { x: frontRight.x + forward.x, y: frontRight.y + forward.y }
+    const height = 32 + random() * 18 + row * 6
+
+    buildings.push({
+      footprint: [frontLeft, frontRight, backRight, backLeft],
+      roofHeight: height,
+      hueShift: random(),
+    })
+  }
+
+  const people = []
+  const visitorCount = 3 + Math.floor(random() * 3) + (choice.id === 'port-town' ? 2 : 0)
+  for (let i = 0; i < visitorCount; i += 1) {
+    const theta = random() * TWO_PI
+    const distance = plazaRadius * 0.35 + random() * plazaRadius * 0.4
+    people.push({
+      x: center.x + Math.cos(theta) * distance,
+      y: center.y + Math.sin(theta) * distance,
+      radius: 6 + random() * 4,
+      tint: random(),
+    })
+  }
+
+  const populationMin = choice.populationRange[0]
+  const populationMax = choice.populationRange[1]
+  const population = Math.round(
+    populationMin + random() * (populationMax - populationMin),
+  )
+
+  const marketTheme = SETTLEMENT_MARKET_THEMES[Math.floor(random() * SETTLEMENT_MARKET_THEMES.length)]
+
+  const name = generateSettlementName(random, usedNames, island.name)
+
+  return {
+    id: `${island.id}-settlement`,
+    name,
+    sizeId: choice.id,
+    sizeLabel: choice.label,
+    population,
+    dock,
+    center,
+    plazaRadius,
+    road: { start: center, end: roadEnd },
+    buildings,
+    people,
+    marketTheme,
+  }
+}
+
 function generateIslands(count, random = Math.random) {
   const islands = []
   const usedNames = new Set()
+  const usedSettlementNames = new Set()
   let attempts = 0
-  while (islands.length < count && attempts < count * 60) {
+  while (islands.length < count && attempts < count * 90) {
     attempts += 1
-    const radius = 200 + random() * 320
+    let radius
+    const sizeRoll = random()
+    if (sizeRoll < 0.55) {
+      radius = 200 + random() * 320
+    } else if (sizeRoll < 0.85) {
+      radius = 520 + random() * 220
+    } else {
+      radius = 740 + random() * 320
+    }
+
     const x = random() * MAP_SIZE
     const y = random() * MAP_SIZE
+    const borderDistance = Math.min(x, MAP_SIZE - x, y, MAP_SIZE - y)
+    if (borderDistance < radius + MAP_EDGE_CLEARANCE) {
+      continue
+    }
 
     if (
       islands.some((existing) => {
@@ -656,8 +932,9 @@ function generateIslands(count, random = Math.random) {
 
     const palette = pickPalette(random)
     const name = generateIslandName(random, usedNames)
-    islands.push({
-      id: `island-${islands.length}`,
+    const islandId = `island-${islands.length}`
+    const island = {
+      id: islandId,
       x,
       y,
       radius,
@@ -679,7 +956,17 @@ function generateIslands(count, random = Math.random) {
       streams: generateStreams(coastline, radius, random),
       highlights: generateMeadowHighlights(grass, radius, random),
       name,
-    })
+      structures: [],
+      settlement: null,
+    }
+
+    const settlement = generateSettlementForIsland(island, random, usedSettlementNames)
+    if (settlement) {
+      island.settlement = settlement
+      island.structures.push({ type: 'dock', polygon: settlement.dock.polygon })
+    }
+
+    islands.push(island)
   }
 
   return islands
@@ -1079,6 +1366,27 @@ function App() {
 
       current.landStatus = finalSeaState
 
+      if (current.anchorState === 'anchored') {
+        let nearestDockId = null
+        let nearestDockDistance = Infinity
+        for (const island of islands) {
+          const settlement = island.settlement
+          if (!settlement?.dock) {
+            continue
+          }
+          const berth = settlement.dock.berthPoint
+          const worldBerth = { x: island.x + berth.x, y: island.y + berth.y }
+          const berthDistance = Math.hypot(worldBerth.x - current.x, worldBerth.y - current.y)
+          if (berthDistance < DOCKING_DISTANCE && berthDistance < nearestDockDistance) {
+            nearestDockDistance = berthDistance
+            nearestDockId = settlement.id
+          }
+        }
+        current.dockedSettlementId = nearestDockId
+      } else if (current.dockedSettlementId != null) {
+        current.dockedSettlementId = null
+      }
+
       if (wind) {
         current.wind = {
           direction: wind.direction ?? 0,
@@ -1469,7 +1777,32 @@ function App() {
     }
   }
 
+  const handleLeaveSettlement = () => {
+    setBoatState((existing) => {
+      if (
+        existing.anchorState === 'weighing' &&
+        existing.dockedSettlementId == null
+      ) {
+        return existing
+      }
+
+      const updated = {
+        ...existing,
+        anchorState: 'weighing',
+        anchorProgress: 0,
+        idleTime: 0,
+        dockedSettlementId: null,
+      }
+      boatRef.current = updated
+      return updated
+    })
+  }
+
   const shipStatus = useMemo(() => {
+    if (boatState.anchorState === 'anchored' && boatState.dockedSettlementId) {
+      return 'Docked'
+    }
+
     if (boatState.landStatus?.zone === 'land') {
       return 'Run aground'
     }
@@ -1503,14 +1836,31 @@ function App() {
       return { zone: 'Unknown', range: '—' }
     }
 
+    const distance = Number.isFinite(status.distance)
+      ? Math.max(0, Math.round(status.distance))
+      : null
+
     if (status.zone === 'land') {
+      if (status.structureType === 'dock') {
+        return {
+          zone: 'Pier collision',
+          range: 'Hull pressed to dock',
+        }
+      }
       return {
         zone: 'Grounded',
         range: `${Math.round(status.penetration)} m inland`,
       }
     }
 
-    const distance = Number.isFinite(status.distance) ? Math.max(0, Math.round(status.distance)) : null
+    if (status.structureType === 'dock') {
+      const zone = status.zone === 'shore' ? 'Harbor waters' : 'Harbor approach'
+      return {
+        zone,
+        range: distance != null ? `${distance} m to dock` : '—',
+      }
+    }
+
     if (status.zone === 'shore') {
       return {
         zone: 'Coastal waters',
@@ -1523,6 +1873,20 @@ function App() {
       range: distance != null && distance < Infinity ? `${distance} m to land` : '—',
     }
   }, [boatState.landStatus])
+
+  const dockedSettlementContext = useMemo(() => {
+    if (!boatState.dockedSettlementId) {
+      return null
+    }
+
+    for (const island of islands) {
+      if (island.settlement?.id === boatState.dockedSettlementId) {
+        return { settlement: island.settlement, island }
+      }
+    }
+
+    return null
+  }, [boatState.dockedSettlementId, islands])
 
   const damageState = useMemo(
     () => getDamageStateForHealth(boatState.health),
@@ -1549,6 +1913,22 @@ function App() {
     ? 'Tacking'
     : getRelativeWindDescription(relativeWindAngle)
   const windStatSubtitle = `${windDirectionLabel} · ${relativeWindDescription}`
+
+  const dockedSettlement = dockedSettlementContext?.settlement
+  const dockedPopulation = useMemo(() => {
+    if (!dockedSettlement) {
+      return null
+    }
+    try {
+      return dockedSettlement.population.toLocaleString('en-US')
+    } catch {
+      return `${dockedSettlement.population}`
+    }
+  }, [dockedSettlement])
+  const settlementPeople = useMemo(
+    () => (dockedSettlement?.people ? dockedSettlement.people.slice(0, 6) : []),
+    [dockedSettlement],
+  )
 
   const windForecast = useMemo(() => {
     const changeTimer = Math.max(0, Math.round(windState.changeTimer ?? 0))
@@ -1760,6 +2140,78 @@ function App() {
             </div>
           </div>
         )}
+        {dockedSettlement && (
+          <div className="settlement-wrapper">
+            <div
+              className={`settlement-panel glass-panel hud-panel settlement-panel--${dockedSettlement.sizeId}`}
+            >
+              <div className="settlement-header">
+                <div className="settlement-heading">
+                  <div className="settlement-name">{dockedSettlement.name}</div>
+                  <div className="settlement-meta">
+                    <span className="settlement-size">{dockedSettlement.sizeLabel}</span>
+                    {dockedPopulation && (
+                      <span className="settlement-population">
+                        Population <strong>{dockedPopulation}</strong>
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="settlement-leave"
+                  onClick={handleLeaveSettlement}
+                >
+                  Leave Town
+                </button>
+              </div>
+              <div className="settlement-body">
+                <div className={`settlement-illustration settlement-illustration--${dockedSettlement.sizeId}`}>
+                  <div className="settlement-illustration-sky" />
+                  <div className="settlement-illustration-dock" />
+                  <div className="settlement-illustration-water" />
+                  <div className="settlement-illustration-harbor" />
+                  <div className="settlement-illustration-buildings">
+                    <span className="settlement-building settlement-building--hall" />
+                    <span className="settlement-building settlement-building--shop" />
+                    <span className="settlement-building settlement-building--market" />
+                  </div>
+                  <div className="settlement-illustration-people">
+                    {settlementPeople.map((_, index) => (
+                      <span
+                        key={`person-${index}`}
+                        className={`settlement-person settlement-person--${index % 3}`}
+                        style={{ left: `${18 + index * 18}px` }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="settlement-details">
+                  <div className="settlement-detail">
+                    <span className="settlement-detail-label">Harbor</span>
+                    <span className="settlement-detail-value">{dockedSettlement.sizeLabel}</span>
+                  </div>
+                  <div className="settlement-detail">
+                    <span className="settlement-detail-label">Population</span>
+                    <span className="settlement-detail-value">{dockedPopulation ?? '—'}</span>
+                  </div>
+                  {dockedSettlement.marketTheme && (
+                    <div className="settlement-detail">
+                      <span className="settlement-detail-label">Known for</span>
+                      <span className="settlement-detail-value">
+                        {`${dockedSettlement.marketTheme} Trade`}
+                      </span>
+                    </div>
+                  )}
+                  <p className="settlement-description">
+                    Drop anchor near the jetty to barter with merchants, recruit new hands, or simply
+                    enjoy a warm meal ashore before returning to the open sea.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="bottom-panels">
           {isWeatherEnabled && isWeatherVisible && (
             <div className="weather-panel glass-panel hud-panel">
@@ -1957,6 +2409,7 @@ function getPointLandProximity(point, islands) {
     normal: { x: 0, y: 0 },
     islandId: null,
     penetration: 0,
+    structureType: null,
   }
 
   for (const island of islands) {
@@ -1967,44 +2420,60 @@ function getPointLandProximity(point, islands) {
       continue
     }
 
-    const { distance, signedDistance, closestPoint } = getDistanceToPolygon(localPoint, island.coastline)
-    if (!Number.isFinite(distance)) {
-      continue
-    }
+    const polygons = [
+      { polygon: island.coastline, type: 'coastline' },
+      ...((island.structures ?? []).map((structure) => ({
+        polygon: structure.polygon,
+        type: structure.type,
+      })) ?? []),
+    ]
 
-    const worldClosest = { x: closestPoint.x + island.x, y: closestPoint.y + island.y }
-    let normalX = point.x - worldClosest.x
-    let normalY = point.y - worldClosest.y
-    let length = Math.hypot(normalX, normalY)
-    if (length === 0) {
-      normalX = localPoint.x
-      normalY = localPoint.y
-      length = Math.hypot(normalX, normalY) || 1
-    }
-    const normal = { x: normalX / length, y: normalY / length }
+    for (const { polygon, type } of polygons) {
+      if (!polygon?.length) {
+        continue
+      }
 
-    let zone = 'sea'
-    if (signedDistance <= 0) {
-      zone = 'land'
-    } else if (signedDistance <= COLLISION_EDGE_THRESHOLD) {
-      zone = 'shore'
-    }
+      const { distance, signedDistance, closestPoint } = getDistanceToPolygon(localPoint, polygon)
+      if (!Number.isFinite(distance)) {
+        continue
+      }
 
-    const priority = zone === 'land' ? 2 : zone === 'shore' ? 1 : 0
+      const worldClosest = { x: closestPoint.x + island.x, y: closestPoint.y + island.y }
+      let normalX = point.x - worldClosest.x
+      let normalY = point.y - worldClosest.y
+      let length = Math.hypot(normalX, normalY)
+      if (length === 0) {
+        normalX = localPoint.x
+        normalY = localPoint.y
+        length = Math.hypot(normalX, normalY) || 1
+      }
+      const normal = { x: normalX / length, y: normalY / length }
 
-    if (
-      priority > best.priority ||
-      (priority === best.priority && distance < best.distance)
-    ) {
-      best = {
-        zone,
-        priority,
-        distance: Math.abs(signedDistance),
-        signedDistance,
-        nearestPoint: worldClosest,
-        normal,
-        islandId: island.id,
-        penetration: signedDistance < 0 ? -signedDistance : 0,
+      let zone = 'sea'
+      if (signedDistance <= 0) {
+        zone = 'land'
+      } else if (signedDistance <= COLLISION_EDGE_THRESHOLD) {
+        zone = 'shore'
+      }
+
+      const priority = zone === 'land' ? 2 : zone === 'shore' ? 1 : 0
+      const absoluteDistance = Math.abs(signedDistance)
+
+      if (
+        priority > best.priority ||
+        (priority === best.priority && absoluteDistance < best.distance)
+      ) {
+        best = {
+          zone,
+          priority,
+          distance: absoluteDistance,
+          signedDistance,
+          nearestPoint: worldClosest,
+          normal,
+          islandId: island.id,
+          penetration: signedDistance < 0 ? -signedDistance : 0,
+          structureType: type || null,
+        }
       }
     }
   }
@@ -2022,6 +2491,7 @@ function getBoatSeaState(boat, islands) {
     normal: { x: 0, y: 0 },
     islandId: null,
     penetration: 0,
+    structureType: null,
   }
   let finalZone = 'sea'
   let deepestPenetration = null
@@ -2059,6 +2529,7 @@ function getBoatSeaState(boat, islands) {
     normal: resolved.normal,
     islandId: resolved.islandId,
     penetration: deepestPenetration?.penetration ?? 0,
+    structureType: resolved.structureType ?? null,
   }
 }
 
@@ -2237,6 +2708,8 @@ function drawMiniMap(ctx, boat, islands) {
       ctx.stroke()
     }
 
+    drawMiniMapSettlement(ctx, island, scale)
+
     ctx.restore()
   }
 
@@ -2386,6 +2859,8 @@ function drawWorldMap(canvas, state, boat, islands) {
       ctx.stroke()
     }
 
+    drawSettlementStructures(ctx, island)
+
     ctx.restore()
   }
 
@@ -2478,6 +2953,159 @@ function paintSea(ctx, width, height, camera, waves) {
   ctx.restore()
 }
 
+function drawSettlementStructures(ctx, island) {
+  const settlement = island.settlement
+  if (!settlement) {
+    return
+  }
+
+  ctx.save()
+
+  const dock = settlement.dock
+  if (dock?.polygon?.length) {
+    ctx.beginPath()
+    ctx.moveTo(dock.polygon[0].x, dock.polygon[0].y)
+    for (let i = 1; i < dock.polygon.length; i += 1) {
+      const point = dock.polygon[i]
+      ctx.lineTo(point.x, point.y)
+    }
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(166, 108, 62, 0.92)'
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(70, 44, 26, 0.65)'
+    ctx.lineWidth = Math.max(2.5, island.radius * 0.014)
+    ctx.stroke()
+
+    const plankCount = Math.max(4, Math.round(dock.length / 60))
+    const step = dock.length / plankCount
+    const perpendicular = { x: -dock.direction.y, y: dock.direction.x }
+    ctx.strokeStyle = 'rgba(52, 31, 16, 0.38)'
+    ctx.lineWidth = Math.max(1.4, island.radius * 0.008)
+    for (let i = 1; i < plankCount; i += 1) {
+      const offset = step * i
+      const plankX = dock.landwardBase.x + dock.direction.x * offset
+      const plankY = dock.landwardBase.y + dock.direction.y * offset
+      const half = dock.width / 2
+      ctx.beginPath()
+      ctx.moveTo(plankX + perpendicular.x * half, plankY + perpendicular.y * half)
+      ctx.lineTo(plankX - perpendicular.x * half, plankY - perpendicular.y * half)
+      ctx.stroke()
+    }
+  }
+
+  if (settlement.road) {
+    ctx.strokeStyle = 'rgba(219, 188, 142, 0.82)'
+    ctx.lineWidth = Math.max(3, island.radius * 0.018)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(settlement.road.start.x, settlement.road.start.y)
+    ctx.lineTo(settlement.road.end.x, settlement.road.end.y)
+    ctx.stroke()
+  }
+
+  if (settlement.plazaRadius > 0) {
+    ctx.fillStyle = 'rgba(242, 214, 156, 0.48)'
+    ctx.beginPath()
+    ctx.arc(settlement.center.x, settlement.center.y, settlement.plazaRadius, 0, TWO_PI)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(147, 104, 58, 0.38)'
+    ctx.lineWidth = Math.max(2, island.radius * 0.012)
+    ctx.stroke()
+  }
+
+  if (settlement.buildings?.length) {
+    for (const building of settlement.buildings) {
+      const footprint = building.footprint
+      if (!footprint?.length) {
+        continue
+      }
+
+      ctx.beginPath()
+      ctx.moveTo(footprint[0].x, footprint[0].y)
+      for (let i = 1; i < footprint.length; i += 1) {
+        const point = footprint[i]
+        ctx.lineTo(point.x, point.y)
+      }
+      ctx.closePath()
+      const baseHue = 26 + building.hueShift * 42 + (settlement.sizeId === 'port-town' ? 10 : 0)
+      const lightness = 58 - building.hueShift * 8
+      ctx.fillStyle = `hsl(${baseHue}, 58%, ${lightness}%)`
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(52, 36, 22, 0.4)'
+      ctx.lineWidth = Math.max(1.4, island.radius * 0.006)
+      ctx.stroke()
+
+      const frontMid = {
+        x: (footprint[0].x + footprint[1].x) / 2,
+        y: (footprint[0].y + footprint[1].y) / 2,
+      }
+      const ridge = {
+        x: frontMid.x - settlement.dock.direction.x * building.roofHeight,
+        y: frontMid.y - settlement.dock.direction.y * building.roofHeight,
+      }
+      ctx.beginPath()
+      ctx.moveTo(footprint[0].x, footprint[0].y)
+      ctx.lineTo(ridge.x, ridge.y)
+      ctx.lineTo(footprint[1].x, footprint[1].y)
+      ctx.closePath()
+      ctx.fillStyle = `hsla(${baseHue + 10}, 70%, 72%, 0.6)`
+      ctx.fill()
+    }
+  }
+
+  if (settlement.people?.length) {
+    ctx.lineWidth = Math.max(1.1, island.radius * 0.004)
+    for (const person of settlement.people) {
+      ctx.save()
+      ctx.translate(person.x, person.y)
+      ctx.fillStyle = `hsla(${200 + person.tint * 120}, 65%, 65%, 0.9)`
+      ctx.beginPath()
+      ctx.arc(0, -person.radius * 0.55, person.radius * 0.45, 0, TWO_PI)
+      ctx.fill()
+      ctx.fillStyle = `hsla(${20 + person.tint * 40}, 68%, 58%, 0.9)`
+      ctx.beginPath()
+      ctx.moveTo(-person.radius * 0.35, -person.radius * 0.2)
+      ctx.lineTo(person.radius * 0.35, -person.radius * 0.2)
+      ctx.lineTo(person.radius * 0.25, person.radius * 0.8)
+      ctx.lineTo(-person.radius * 0.25, person.radius * 0.8)
+      ctx.closePath()
+      ctx.fill()
+      ctx.restore()
+    }
+  }
+
+  ctx.restore()
+}
+
+function drawMiniMapSettlement(ctx, island, scale) {
+  const settlement = island.settlement
+  if (!settlement) {
+    return
+  }
+
+  const dock = settlement.dock
+  if (dock?.polygon?.length) {
+    ctx.beginPath()
+    ctx.moveTo(dock.polygon[0].x * scale, dock.polygon[0].y * scale)
+    for (let i = 1; i < dock.polygon.length; i += 1) {
+      const point = dock.polygon[i]
+      ctx.lineTo(point.x * scale, point.y * scale)
+    }
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(187, 134, 78, 0.85)'
+    ctx.fill()
+  }
+
+  const harborRadius = Math.max(6, settlement.plazaRadius * scale * 0.35)
+  ctx.fillStyle = 'rgba(255, 224, 170, 0.95)'
+  ctx.beginPath()
+  ctx.arc(settlement.center.x * scale, settlement.center.y * scale, harborRadius, 0, TWO_PI)
+  ctx.fill()
+  ctx.strokeStyle = 'rgba(128, 88, 42, 0.6)'
+  ctx.lineWidth = Math.max(1, scale * 8)
+  ctx.stroke()
+}
+
 function drawIslands(ctx, islands, camera, shorelineTime = 0) {
   for (const island of islands) {
     const screenX = island.x - camera.x
@@ -2506,6 +3134,7 @@ function drawIslands(ctx, islands, camera, shorelineTime = 0) {
     drawStreamsOnIsland(ctx, island, grassPath)
     drawCanopyBase(ctx, island, canopyPath)
     drawTreeClusters(ctx, island, canopyPath)
+    drawSettlementStructures(ctx, island)
 
     ctx.restore()
   }
