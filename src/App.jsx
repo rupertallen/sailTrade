@@ -9,6 +9,17 @@ const MAX_FORWARD_SPEED = 260 // world units per second
 const ACCELERATION = 140
 const BRAKE_DECELERATION = 220
 const TURN_RATE = 1.8
+const MIN_HEALTH = 0.05
+
+const DAMAGE_STATES = [
+  { label: 'Sound', minHealth: 0.999, penalty: 0 },
+  { label: 'Lightly Riddled', minHealth: 0.9, penalty: 0.1 },
+  { label: 'Shaken', minHealth: 0.75, penalty: 0.25 },
+  { label: 'Much Shattered', minHealth: 0.55, penalty: 0.45 },
+  { label: 'Crippled', minHealth: 0.3, penalty: 0.7 },
+  { label: 'A Wreck', minHealth: 0.15, penalty: 0.85 },
+  { label: 'Foundering', minHealth: MIN_HEALTH, penalty: 0.95 },
+]
 
 const controlKeys = {
   forward: ['w', 'arrowup'],
@@ -97,6 +108,21 @@ function createSeededRng(seedValue) {
   return random
 }
 
+function getDamageStateForHealth(health) {
+  const normalized = Math.max(MIN_HEALTH, Math.min(1, health ?? 1))
+  for (const state of DAMAGE_STATES) {
+    if (normalized >= state.minHealth) {
+      return state
+    }
+  }
+  return DAMAGE_STATES[DAMAGE_STATES.length - 1]
+}
+
+function getMaxSpeedForHealth(health) {
+  const state = getDamageStateForHealth(health)
+  return MAX_FORWARD_SPEED * (1 - state.penalty)
+}
+
 function createInitialBoatState() {
   return {
     x: MAP_SIZE / 2,
@@ -106,6 +132,7 @@ function createInitialBoatState() {
     sailLevel: 0.4,
     sailTarget: 0.4,
     idleTime: 0,
+    health: 1,
     anchorState: 'stowed',
     anchorProgress: 0,
     wakeTimer: 0,
@@ -534,6 +561,9 @@ function App() {
 
     const updateBoat = (dt) => {
       const current = { ...boatRef.current }
+      const wasOnLand = current.landStatus?.zone === 'land'
+      let maxSpeedForHealth = getMaxSpeedForHealth(current.health)
+      let damageIncurred = false
       const commands = {
         forward: isPressed(pressedKeys.current, controlKeys.forward),
         backward: isPressed(pressedKeys.current, controlKeys.backward),
@@ -596,7 +626,7 @@ function App() {
       }
 
       const canAccelerate = !['dropping', 'anchored', 'weighing'].includes(current.anchorState)
-      const desiredSpeed = canAccelerate ? current.sailLevel * MAX_FORWARD_SPEED : 0
+      const desiredSpeed = canAccelerate ? current.sailLevel * maxSpeedForHealth : 0
 
       if (current.speed < desiredSpeed) {
         current.speed = Math.min(desiredSpeed, current.speed + ACCELERATION * dt)
@@ -609,7 +639,8 @@ function App() {
       }
 
       const canSteer = !['anchored', 'weighing'].includes(current.anchorState)
-      const turnStrength = 0.6 + Math.min(current.speed / MAX_FORWARD_SPEED, 1)
+      const speedRatio = maxSpeedForHealth > 0 ? current.speed / maxSpeedForHealth : 0
+      const turnStrength = 0.6 + Math.min(speedRatio, 1)
 
       if (canSteer && commands.left) {
         current.heading -= TURN_RATE * dt * turnStrength
@@ -621,10 +652,30 @@ function App() {
       const proposedX = current.x + Math.cos(current.heading) * current.speed * dt
       const proposedY = current.y + Math.sin(current.heading) * current.speed * dt
 
+      current.speed = Math.min(current.speed, maxSpeedForHealth)
+
       const proposedBoat = { x: proposedX, y: proposedY, heading: current.heading }
       const proposedSeaState = getBoatSeaState(proposedBoat, islands)
       if (proposedSeaState.zone === 'land') {
-        current.speed = Math.min(current.speed, 38)
+        const impactSpeed = current.speed
+        if (!wasOnLand && impactSpeed > 0) {
+          const damageAmount = impactSpeed > MAX_FORWARD_SPEED * 0.5 ? 0.1 : 0.05
+          const newHealth = Math.max(MIN_HEALTH, current.health - damageAmount)
+          if (newHealth < current.health) {
+            current.health = newHealth
+            maxSpeedForHealth = getMaxSpeedForHealth(current.health)
+            damageIncurred = true
+          }
+        }
+
+        if (damageIncurred) {
+          current.sailLevel = 0
+          current.sailTarget = 0
+          current.speed = 0
+        } else {
+          current.speed = Math.min(current.speed, 38)
+        }
+
         if (proposedSeaState.penetration > 0) {
           const pushBack = proposedSeaState.penetration + 1
           current.x -= proposedSeaState.normal.x * pushBack
@@ -822,6 +873,14 @@ function App() {
     }
   }, [boatState.landStatus])
 
+  const damageState = useMemo(
+    () => getDamageStateForHealth(boatState.health),
+    [boatState.health],
+  )
+  const healthPercent = Math.max(Math.round((boatState.health ?? 1) * 100), Math.round(MIN_HEALTH * 100))
+  const effectiveTopSpeedKnots = Math.round(getMaxSpeedForHealth(boatState.health))
+  const damagePenaltyPercent = Math.round(damageState.penalty * 100)
+
   const speedKnots = Math.round(boatState.speed)
   const headingDegrees = Math.round(
     (((boatState.heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (180 / Math.PI),
@@ -908,12 +967,28 @@ function App() {
               <span className="ship-stat-value">{speedKnots} kn</span>
             </div>
             <div className="ship-stat">
+              <span className="ship-stat-label">Top Speed</span>
+              <span className="ship-stat-value">
+                {effectiveTopSpeedKnots} kn
+                {damagePenaltyPercent > 0 && (
+                  <span className="ship-stat-sub">−{damagePenaltyPercent}%</span>
+                )}
+              </span>
+            </div>
+            <div className="ship-stat">
               <span className="ship-stat-label">Heading</span>
               <span className="ship-stat-value">{headingDegrees}°</span>
             </div>
             <div className="ship-stat">
               <span className="ship-stat-label">Status</span>
               <span className="ship-stat-value">{shipStatus}</span>
+            </div>
+            <div className="ship-stat">
+              <span className="ship-stat-label">Hull</span>
+              <span className="ship-stat-value">
+                {damageState.label}
+                <span className="ship-stat-sub">{healthPercent}%</span>
+              </span>
             </div>
             <div className="ship-stat">
               <span className="ship-stat-label">Sea Zone</span>
