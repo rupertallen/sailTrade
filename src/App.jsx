@@ -36,7 +36,7 @@ const MAX_BOAT_EXTENT = BOAT_COLLISION_OUTLINE.reduce(
 )
 
 const MINIMAP_WORLD_RADIUS = 2200
-const COLLISION_EDGE_THRESHOLD = 6
+const COLLISION_EDGE_THRESHOLD = 10
 const islandTextureCache = new WeakMap()
 
 function generateRandomSeed() {
@@ -352,9 +352,9 @@ function generateIslands(count, random = Math.random) {
     }
 
     const coastline = generateCoastlineShape(radius, random)
-    const beach = createInnerRing(coastline, 0.98, 0.02, random)
-    const grass = createInnerRing(coastline, 0.68, 0.16, random)
-    const canopy = createInnerRing(coastline, 0.5, 0.22, random)
+    const beach = createInnerRing(coastline, 0.955, 0.015, random)
+    const grass = createInnerRing(coastline, 0.8, 0.12, random)
+    const canopy = createInnerRing(coastline, 0.58, 0.18, random)
 
     const palette = pickPalette(random)
     islands.push({
@@ -376,7 +376,7 @@ function generateIslands(count, random = Math.random) {
         glow: 0.22 + random() * 0.25,
       },
       cliffs: generateCliffs(random),
-      treeClusters: generateTreeClusters(canopy, radius, random),
+      treeClusters: [],
       streams: generateStreams(coastline, radius, random),
       highlights: generateMeadowHighlights(grass, radius, random),
     })
@@ -876,10 +876,18 @@ function getBoatCollisionSamples(boat) {
   const cos = Math.cos(boat.heading)
   const sin = Math.sin(boat.heading)
 
-  for (const offset of BOAT_COLLISION_OUTLINE) {
+  for (let i = 0; i < BOAT_COLLISION_OUTLINE.length; i += 1) {
+    const offset = BOAT_COLLISION_OUTLINE[i]
+    const next = BOAT_COLLISION_OUTLINE[(i + 1) % BOAT_COLLISION_OUTLINE.length]
+
     const rotatedX = boat.x + offset.x * cos - offset.y * sin
     const rotatedY = boat.y + offset.x * sin + offset.y * cos
     samples.push({ x: rotatedX, y: rotatedY })
+
+    const mid = { x: (offset.x + next.x) / 2, y: (offset.y + next.y) / 2 }
+    const midX = boat.x + mid.x * cos - mid.y * sin
+    const midY = boat.y + mid.x * sin + mid.y * cos
+    samples.push({ x: midX, y: midY })
   }
 
   return samples
@@ -943,6 +951,7 @@ function detectCollision(boat, islands) {
       const localPoint = { x: sample.x - island.x, y: sample.y - island.y }
       if (
         isPointInsidePolygon(localPoint, island.coastline) ||
+        isPointInsidePolygon(localPoint, island.grass) ||
         isPointNearPolygonEdge(localPoint, island.coastline, COLLISION_EDGE_THRESHOLD)
       ) {
         return true
@@ -1158,7 +1167,7 @@ function drawIslands(ctx, islands, camera, shorelineTime = 0) {
     drawWaterHalo(ctx, island, coastPath)
     drawShore(ctx, island, coastPath)
     drawBeach(ctx, island, beachPath)
-    drawShorelineWaves(ctx, island, coastPath, shorelineTime)
+    drawShorelineWaves(ctx, island, coastPath, beachPath, shorelineTime)
     drawCliffs(ctx, island, coastPath)
     drawGrass(ctx, island, grassPath)
     addMeadowHighlights(ctx, island, grassPath)
@@ -1406,34 +1415,48 @@ function applyTexture(ctx, path, island, type, options = {}) {
   ctx.restore()
 }
 
-function drawShorelineWaves(ctx, island, coastPath, time) {
+function drawShorelineWaves(ctx, island, coastPath, beachPath, time) {
   const animation = island.waveAnimation ?? { offset: 0, speed: 1, dash: 16, glow: 0.3 }
-  const dashLength = Math.max(8, animation.dash)
-  const dashGap = dashLength * 1.2
-  const travel = -((time * 60 * (animation.speed ?? 1)) + animation.offset)
-  const swayX = Math.sin(time * 1.8 + animation.offset * 0.1) * 1.1
-  const swayY = Math.cos(time * 1.4 + animation.offset * 0.08) * 0.9
+  const tidePhase = time * (0.35 + (animation.speed ?? 1) * 0.25) + animation.offset * 0.12
+  const retreatPhase = time * 0.65 + animation.offset * 0.22
+  const tide = (Math.sin(tidePhase) + 1) / 2
+  const retreat = (Math.sin(retreatPhase) + 1) / 2
+
+  const bandPath = new Path2D()
+  bandPath.addPath(coastPath)
+  bandPath.addPath(beachPath)
 
   ctx.save()
+  ctx.clip(bandPath, 'evenodd')
   ctx.globalCompositeOperation = 'lighter'
-  ctx.setLineDash([dashLength, dashGap])
-  ctx.lineDashOffset = travel
-  ctx.lineWidth = 2.6
-  ctx.globalAlpha = 0.55 * (animation.glow ?? 0.3)
-  ctx.strokeStyle = 'rgba(220, 244, 255, 0.8)'
-  ctx.shadowBlur = 12
-  ctx.shadowColor = 'rgba(150, 210, 255, 0.45)'
-  ctx.shadowOffsetX = swayX * 0.6
-  ctx.shadowOffsetY = swayY * 0.6
-  ctx.stroke(coastPath)
 
-  ctx.shadowBlur = 0
-  ctx.setLineDash([dashLength * 1.3, dashGap * 1.15])
-  ctx.lineDashOffset = travel * 0.6
-  ctx.lineWidth = 5.4
-  ctx.globalAlpha = 0.28 * (animation.glow ?? 0.3)
-  ctx.strokeStyle = 'rgba(130, 200, 236, 0.45)'
-  ctx.stroke(coastPath)
+  const baseInner = island.radius * 0.9
+  const baseOuter = island.radius * 1.04
+  const innerRadius = baseInner - island.radius * 0.025 * tide
+  const outerRadius = baseOuter + island.radius * 0.03 * retreat
+
+  const gradient = ctx.createRadialGradient(0, 0, innerRadius, 0, 0, outerRadius)
+  gradient.addColorStop(0, 'rgba(255, 255, 255, 0)')
+  gradient.addColorStop(0.45, 'rgba(206, 236, 255, 0.18)')
+  gradient.addColorStop(0.82, 'rgba(150, 208, 238, 0.22)')
+  gradient.addColorStop(1, 'rgba(110, 186, 226, 0.12)')
+
+  const extent = island.radius * 2.2
+  ctx.globalAlpha = 0.5
+  ctx.fillStyle = gradient
+  ctx.fillRect(-extent, -extent, extent * 2, extent * 2)
+
+  const foamInner = innerRadius - island.radius * 0.01
+  const foamOuter = innerRadius + island.radius * (0.06 + tide * 0.02)
+  const foamGradient = ctx.createRadialGradient(0, 0, foamInner, 0, 0, foamOuter)
+  foamGradient.addColorStop(0, 'rgba(255, 255, 255, 0.32)')
+  foamGradient.addColorStop(0.7, 'rgba(226, 246, 255, 0.28)')
+  foamGradient.addColorStop(1, 'rgba(226, 246, 255, 0)')
+
+  ctx.globalAlpha = 0.32 + tide * 0.18
+  ctx.fillStyle = foamGradient
+  ctx.fillRect(-extent, -extent, extent * 2, extent * 2)
+
   ctx.restore()
 }
 
