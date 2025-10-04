@@ -628,6 +628,7 @@ function App() {
   const [copyStatus, setCopyStatus] = useState('')
   const [activeMenu, setActiveMenu] = useState(null)
   const [isMiniMapVisible, setMiniMapVisible] = useState(false)
+  const [isWeatherVisible, setWeatherVisible] = useState(true)
   const copyTimeoutRef = useRef(null)
 
   const seedData = useMemo(() => {
@@ -1190,6 +1191,61 @@ function App() {
     : getRelativeWindDescription(relativeWindAngle)
   const windStatSubtitle = `${windDirectionLabel} · ${relativeWindDescription}`
 
+  const windForecast = useMemo(() => {
+    const changeTimer = Math.max(0, Math.round(windState.changeTimer ?? 0))
+    const targetStrength = clamp(windState.targetStrength ?? windState.strength ?? 0, 0, 1)
+    const targetKnots = Math.round(lerp(WIND_SPEED_BASE_KNOTS, WIND_SPEED_MAX_KNOTS, targetStrength))
+    const targetDirectionDegrees = Math.round(
+      (((windState.targetDirection % TWO_PI) + TWO_PI) % TWO_PI) * (180 / Math.PI),
+    )
+    const targetDirectionLabel = getCardinalDirection(targetDirectionDegrees)
+
+    let trend = 'steady'
+    if (targetKnots > windSpeedKnots + 1) {
+      trend = 'building'
+    } else if (targetKnots < windSpeedKnots - 1) {
+      trend = 'easing'
+    }
+
+    let timing = 'soon'
+    if (changeTimer >= 120) {
+      const minutes = Math.round(changeTimer / 60)
+      timing = `${minutes} min`
+    } else if (changeTimer >= 10) {
+      timing = `${changeTimer} s`
+    } else if (changeTimer <= 3) {
+      timing = 'imminent'
+    } else {
+      timing = `${changeTimer} s`
+    }
+
+    const headline =
+      trend === 'building' ? 'Building winds' : trend === 'easing' ? 'Easing winds' : 'Steady winds'
+
+    const detail = `Next: ${targetDirectionLabel} · ${targetKnots} kn`
+
+    return {
+      headline,
+      detail,
+      timing,
+    }
+  }, [
+    windState.changeTimer,
+    windState.targetDirection,
+    windState.targetStrength,
+    windState.strength,
+    windSpeedKnots,
+  ])
+
+  const miniMapStyle = useMemo(() => {
+    if (!isWeatherVisible) {
+      return undefined
+    }
+    return {
+      '--mini-map-bottom-extra': 'calc(var(--mini-map-panel-height) + 1.25rem)',
+    }
+  }, [isWeatherVisible])
+
   return (
     <div className="app">
       <canvas ref={canvasRef} className="world-canvas" />
@@ -1211,6 +1267,13 @@ function App() {
                 onClick={() => handleMenuToggle('instructions')}
               >
                 Instructions
+              </button>
+              <button
+                type="button"
+                className={`menu-toggle-button ${isWeatherVisible ? 'is-active' : ''}`}
+                onClick={() => setWeatherVisible((value) => !value)}
+              >
+                Weather
               </button>
               <button
                 type="button"
@@ -1267,61 +1330,82 @@ function App() {
             </div>
           )}
         </div>
-        <div className="bottom-menu glass-panel">
-          <div className="ship-title">Ship</div>
-          <div className="ship-stats">
-            <div className="ship-stat">
-              <span className="ship-stat-label">Speed</span>
-              <span className="ship-stat-value">{speedKnots} kn</span>
+        <div className="bottom-panels">
+          {isWeatherVisible && (
+            <div className="weather-panel glass-panel hud-panel">
+              <div className="weather-title">Weather</div>
+              <div className="weather-stats">
+                <div className="weather-stat">
+                  <span className="weather-stat-label">Wind</span>
+                  <span className="weather-stat-value wind-value">
+                    <span className="wind-speed">{windSpeedKnots} kn</span>
+                    <span className="weather-stat-sub">{windStatSubtitle}</span>
+                    <span className="wind-compass" aria-hidden="true">
+                      <span
+                        className="wind-compass-arrow"
+                        style={{ transform: `rotate(${windDirectionDegrees}deg)` }}
+                      />
+                    </span>
+                  </span>
+                </div>
+                <div className="weather-stat">
+                  <span className="weather-stat-label">Forecast</span>
+                  <span className="weather-stat-value">
+                    {windForecast.headline}
+                    <span className="weather-stat-sub">
+                      {windForecast.detail} · {windForecast.timing}
+                    </span>
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="ship-stat ship-stat--wind">
-              <span className="ship-stat-label">Wind</span>
-              <span className="ship-stat-value wind-value">
-                <span className="wind-speed">{windSpeedKnots} kn</span>
-                <span className="ship-stat-sub">{windStatSubtitle}</span>
-                <span className="wind-compass" aria-hidden="true">
-                  <span
-                    className="wind-compass-arrow"
-                    style={{ transform: `rotate(${windDirectionDegrees}deg)` }}
-                  />
+          )}
+          <div className="ship-panel glass-panel hud-panel">
+            <div className="ship-title">Ship</div>
+            <div className="ship-stats">
+              <div className="ship-stat">
+                <span className="ship-stat-label">Speed</span>
+                <span className="ship-stat-value">{speedKnots} kn</span>
+              </div>
+              <div className="ship-stat">
+                <span className="ship-stat-label">Top Speed</span>
+                <span className="ship-stat-value">
+                  {effectiveTopSpeedKnots} kn
+                  {damagePenaltyPercent > 0 && (
+                    <span className="ship-stat-sub">−{damagePenaltyPercent}%</span>
+                  )}
                 </span>
-              </span>
-            </div>
-            <div className="ship-stat">
-              <span className="ship-stat-label">Top Speed</span>
-              <span className="ship-stat-value">
-                {effectiveTopSpeedKnots} kn
-                {damagePenaltyPercent > 0 && (
-                  <span className="ship-stat-sub">−{damagePenaltyPercent}%</span>
-                )}
-              </span>
-            </div>
-            <div className="ship-stat">
-              <span className="ship-stat-label">Heading</span>
-              <span className="ship-stat-value">{headingDegrees}°</span>
-            </div>
-            <div className="ship-stat">
-              <span className="ship-stat-label">Status</span>
-              <span className="ship-stat-value">{shipStatus}</span>
-            </div>
-            <div className="ship-stat">
-              <span className="ship-stat-label">Hull</span>
-              <span className="ship-stat-value">
-                {damageState.label}
-                <span className="ship-stat-sub">{healthPercent}%</span>
-              </span>
-            </div>
-            <div className="ship-stat">
-              <span className="ship-stat-label">Sea Zone</span>
-              <span className="ship-stat-value">{landProximity.zone}</span>
-            </div>
-            <div className="ship-stat">
-              <span className="ship-stat-label">Range</span>
-              <span className="ship-stat-value">{landProximity.range}</span>
+              </div>
+              <div className="ship-stat">
+                <span className="ship-stat-label">Heading</span>
+                <span className="ship-stat-value">{headingDegrees}°</span>
+              </div>
+              <div className="ship-stat">
+                <span className="ship-stat-label">Status</span>
+                <span className="ship-stat-value">{shipStatus}</span>
+              </div>
+              <div className="ship-stat">
+                <span className="ship-stat-label">Hull</span>
+                <span className="ship-stat-value">
+                  {damageState.label}
+                  <span className="ship-stat-sub">{healthPercent}%</span>
+                </span>
+              </div>
+              <div className="ship-stat">
+                <span className="ship-stat-label">Sea Zone</span>
+                <span className="ship-stat-value">{landProximity.zone}</span>
+              </div>
+              <div className="ship-stat">
+                <span className="ship-stat-label">Range</span>
+                <span className="ship-stat-value">{landProximity.range}</span>
+              </div>
             </div>
           </div>
         </div>
-        <div className={`mini-map-wrapper ${isMiniMapVisible ? 'is-visible' : ''}`}>
+        <div
+          className={`mini-map-wrapper ${isMiniMapVisible ? 'is-visible' : ''}`}
+          style={miniMapStyle}
+        >
           <canvas ref={miniMapRef} className="mini-map-canvas" />
         </div>
       </div>
