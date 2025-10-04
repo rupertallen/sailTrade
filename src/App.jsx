@@ -927,7 +927,9 @@ function isPointNearPolygonEdge(point, polygon, threshold) {
     }
     const closestX = a.x + dx * t
     const closestY = a.y + dy * t
-    const distSq = (point.x - closestX) * (point.x - closestX) + (point.y - closestY) * (point.y - closestY)
+    const deltaX = point.x - closestX
+    const deltaY = point.y - closestY
+    const distSq = deltaX * deltaX + deltaY * deltaY
     if (distSq <= thresholdSq) {
       return true
     }
