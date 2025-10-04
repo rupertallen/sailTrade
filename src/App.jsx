@@ -11,6 +11,20 @@ const BRAKE_DECELERATION = 220
 const TURN_RATE = 1.8
 const MIN_HEALTH = 0.05
 
+const WIND_MIN_STRENGTH = 0.25
+const WIND_MAX_STRENGTH = 1
+const WIND_DIRECTION_VARIANCE = Math.PI / 3
+const WIND_CHANGE_MIN = 48
+const WIND_CHANGE_MAX = 92
+const WIND_ADJUST_RATE = 0.12
+const NO_GO_ANGLE_DEGREES = 20
+const TACK_TARGET_DEGREES = 35
+const TACK_TURN_RATE = 1.6
+const TACK_PERIOD_MIN = 5.5
+const TACK_PERIOD_MAX = 8.5
+const WIND_SPEED_BASE_KNOTS = 6
+const WIND_SPEED_MAX_KNOTS = 28
+
 const DAMAGE_STATES = [
   { label: 'Sound', minHealth: 0.999, penalty: 0 },
   { label: 'Lightly Riddled', minHealth: 0.9, penalty: 0.1 },
@@ -136,6 +150,8 @@ function createInitialBoatState() {
     anchorState: 'stowed',
     anchorProgress: 0,
     wakeTimer: 0,
+    tackTimer: 0,
+    tackDirection: 1,
     landStatus: {
       zone: 'sea',
       distance: Infinity,
@@ -145,7 +161,115 @@ function createInitialBoatState() {
       islandId: null,
       penetration: 0,
     },
+    wind: {
+      direction: 0,
+      strength: 0,
+      angleToWind: 0,
+      multiplier: 1,
+      isTacking: false,
+    },
   }
+}
+
+function createInitialWindState(random = Math.random) {
+  const direction = normalizeAngle(random() * TWO_PI)
+  const strength = clamp(0.35 + random() * 0.4, WIND_MIN_STRENGTH, WIND_MAX_STRENGTH)
+  const changeTimer = WIND_CHANGE_MIN + random() * (WIND_CHANGE_MAX - WIND_CHANGE_MIN)
+  return {
+    direction,
+    strength,
+    targetDirection: direction,
+    targetStrength: strength,
+    changeTimer,
+  }
+}
+
+function updateWindState(wind, dt, random = Math.random) {
+  const next = {
+    direction: wind?.direction ?? 0,
+    strength: wind?.strength ?? WIND_MIN_STRENGTH,
+    targetDirection: wind?.targetDirection ?? wind?.direction ?? 0,
+    targetStrength: wind?.targetStrength ?? wind?.strength ?? WIND_MIN_STRENGTH,
+    changeTimer: wind?.changeTimer ?? 0,
+  }
+
+  next.changeTimer -= dt
+  if (next.changeTimer <= 0) {
+    const directionOffset = (random() - 0.5) * 2 * WIND_DIRECTION_VARIANCE
+    next.targetDirection = normalizeAngle(next.direction + directionOffset)
+    const strengthDelta = (random() - 0.5) * 0.45
+    next.targetStrength = clamp(
+      next.targetStrength + strengthDelta,
+      WIND_MIN_STRENGTH,
+      WIND_MAX_STRENGTH,
+    )
+    const interval = WIND_CHANGE_MIN + random() * (WIND_CHANGE_MAX - WIND_CHANGE_MIN)
+    next.changeTimer = interval
+  }
+
+  const directionDiff = shortestAngleDiff(next.targetDirection, next.direction)
+  next.direction = normalizeAngle(next.direction + directionDiff * dt * WIND_ADJUST_RATE)
+  const strengthDiff = next.targetStrength - next.strength
+  next.strength += strengthDiff * dt * WIND_ADJUST_RATE
+  next.strength = clamp(next.strength, WIND_MIN_STRENGTH, WIND_MAX_STRENGTH)
+
+  return next
+}
+
+const WIND_ANGLE_PROFILE = [
+  { angle: 0, multiplier: 0 },
+  { angle: 20, multiplier: 0 },
+  { angle: 35, multiplier: 0.56 },
+  { angle: 60, multiplier: 0.86 },
+  { angle: 90, multiplier: 1.05 },
+  { angle: 120, multiplier: 1.18 },
+  { angle: 150, multiplier: 1.22 },
+  { angle: 180, multiplier: 1.35 },
+]
+
+function getWindMultiplierForAngle(angleDegrees) {
+  const clampedAngle = clamp(angleDegrees, 0, 180)
+  for (let i = 0; i < WIND_ANGLE_PROFILE.length - 1; i += 1) {
+    const current = WIND_ANGLE_PROFILE[i]
+    const next = WIND_ANGLE_PROFILE[i + 1]
+    if (clampedAngle >= current.angle && clampedAngle <= next.angle) {
+      const range = next.angle - current.angle || 1
+      const t = (clampedAngle - current.angle) / range
+      return lerp(current.multiplier, next.multiplier, t)
+    }
+  }
+  const last = WIND_ANGLE_PROFILE[WIND_ANGLE_PROFILE.length - 1]
+  return last.multiplier
+}
+
+const CARDINAL_DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+
+function getCardinalDirection(degrees) {
+  const normalized = ((degrees % 360) + 360) % 360
+  const index = Math.round(normalized / 45) % CARDINAL_DIRECTIONS.length
+  return CARDINAL_DIRECTIONS[index]
+}
+
+function getRelativeWindDescription(angleDegrees) {
+  if (angleDegrees == null) {
+    return 'Calm'
+  }
+  if (angleDegrees < NO_GO_ANGLE_DEGREES) {
+    return 'Headwind'
+  }
+  if (angleDegrees < 50) {
+    return 'Close hauled'
+  }
+  if (angleDegrees < 80) {
+    return 'Close reach'
+  }
+  if (angleDegrees < 110) {
+    return 'Beam reach'
+  }
+  if (angleDegrees < 150) {
+    return 'Broad reach'
+  }
+  return 'Running'
 }
 
 function normalizeAngle(angle) {
@@ -157,9 +281,26 @@ function shortestAngleDiff(a, b) {
   return wrapped - Math.PI
 }
 
+function degreesToRadians(degrees) {
+  return (degrees * Math.PI) / 180
+}
+
+function radiansToDegrees(radians) {
+  return (radians * 180) / Math.PI
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t
+}
+
 function gaussianFalloff(diff, width) {
   const ratio = diff / width
   return Math.exp(-(ratio * ratio))
+}
+
+function pseudoRandom2D(x, y) {
+  const value = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
+  return value - Math.floor(value)
 }
 
 function isAngleBetween(angle, start, end) {
@@ -511,6 +652,13 @@ function App() {
   const boatRef = useRef(boatState)
   boatRef.current = boatState
 
+  const windRandomRef = useRef(createSeededRng(`${seed}-wind`))
+  const [windState, setWindState] = useState(() => createInitialWindState(windRandomRef.current))
+  const windRef = useRef(windState)
+  windRef.current = windState
+
+  const simulationTimeRef = useRef(0)
+
   useEffect(() => {
     const resetState = createInitialBoatState()
     boatRef.current = resetState
@@ -518,6 +666,11 @@ function App() {
     pressedKeys.current.clear()
     shorelineTimeRef.current = 0
     repairClicksRef.current = 0
+    windRandomRef.current = createSeededRng(`${seed}-wind`)
+    const resetWind = createInitialWindState(windRandomRef.current)
+    windRef.current = resetWind
+    setWindState(resetWind)
+    simulationTimeRef.current = 0
   }, [seed])
 
   useEffect(() => {
@@ -561,7 +714,7 @@ function App() {
     let animationFrame
     let lastTimestamp
 
-    const updateBoat = (dt) => {
+    const updateBoat = (dt, wind) => {
       const current = { ...boatRef.current }
       const wasOnLand = current.landStatus?.zone === 'land'
       let maxSpeedForHealth = getMaxSpeedForHealth(current.health)
@@ -628,7 +781,67 @@ function App() {
       }
 
       const canAccelerate = !['dropping', 'anchored', 'weighing'].includes(current.anchorState)
-      const desiredSpeed = canAccelerate ? current.sailLevel * maxSpeedForHealth : 0
+      const canSteer = !['anchored', 'weighing'].includes(current.anchorState)
+
+      let windMultiplier = 1
+      let relativeWindAngle = 0
+      let relativeWindDegrees = 0
+      let isTackingIntoWind = false
+
+      if (wind) {
+        const windStrength = clamp(wind.strength ?? 0, 0, 1)
+        relativeWindAngle = Math.abs(shortestAngleDiff(current.heading, wind.direction))
+        relativeWindDegrees = radiansToDegrees(relativeWindAngle)
+
+        if (
+          canSteer &&
+          canAccelerate &&
+          windStrength > 0.05 &&
+          relativeWindDegrees < NO_GO_ANGLE_DEGREES
+        ) {
+          isTackingIntoWind = true
+          const manualBias =
+            commands.left && !commands.right ? -1 : commands.right && !commands.left ? 1 : 0
+          if (!Number.isFinite(current.tackDirection) || current.tackDirection === 0) {
+            current.tackDirection = manualBias || 1
+          }
+          if (manualBias !== 0) {
+            current.tackDirection = manualBias
+            current.tackTimer = 0
+          }
+          current.tackTimer = (current.tackTimer ?? 0) + dt
+          const tackDuration = lerp(TACK_PERIOD_MIN, TACK_PERIOD_MAX, 1 - windStrength)
+          if (current.tackTimer >= tackDuration) {
+            current.tackTimer = 0
+            if (manualBias === 0) {
+              current.tackDirection *= -1
+            }
+          }
+
+          const tackAngle = degreesToRadians(TACK_TARGET_DEGREES)
+          const targetHeading = wind.direction + current.tackDirection * tackAngle
+          const headingDiff = shortestAngleDiff(targetHeading, current.heading)
+          const tackAdjustment = clamp(dt * TACK_TURN_RATE, 0, 1)
+          current.heading = normalizeAngle(current.heading + headingDiff * tackAdjustment)
+
+          relativeWindAngle = Math.abs(shortestAngleDiff(current.heading, wind.direction))
+          relativeWindDegrees = radiansToDegrees(relativeWindAngle)
+        } else {
+          current.tackTimer = 0
+        }
+
+        const baseMultiplier = getWindMultiplierForAngle(relativeWindDegrees)
+        windMultiplier = lerp(1, baseMultiplier, windStrength)
+        if (isTackingIntoWind) {
+          const tackFloor = 0.18 + windStrength * 0.22
+          windMultiplier = Math.max(windMultiplier, tackFloor)
+        }
+      } else {
+        current.tackTimer = 0
+      }
+
+      const effectiveMaxSpeed = maxSpeedForHealth * windMultiplier
+      const desiredSpeed = canAccelerate ? current.sailLevel * effectiveMaxSpeed : 0
 
       if (current.speed < desiredSpeed) {
         current.speed = Math.min(desiredSpeed, current.speed + ACCELERATION * dt)
@@ -640,8 +853,7 @@ function App() {
         current.speed = 0
       }
 
-      const canSteer = !['anchored', 'weighing'].includes(current.anchorState)
-      const speedRatio = maxSpeedForHealth > 0 ? current.speed / maxSpeedForHealth : 0
+      const speedRatio = effectiveMaxSpeed > 0 ? current.speed / effectiveMaxSpeed : 0
       const turnStrength = 0.6 + Math.min(speedRatio, 1)
 
       if (canSteer && commands.left) {
@@ -651,10 +863,12 @@ function App() {
         current.heading += TURN_RATE * dt * turnStrength
       }
 
+      current.heading = normalizeAngle(current.heading)
+
       const proposedX = current.x + Math.cos(current.heading) * current.speed * dt
       const proposedY = current.y + Math.sin(current.heading) * current.speed * dt
 
-      current.speed = Math.min(current.speed, maxSpeedForHealth)
+      current.speed = Math.min(current.speed, effectiveMaxSpeed)
 
       const proposedBoat = { x: proposedX, y: proposedY, heading: current.heading }
       const proposedSeaState = getBoatSeaState(proposedBoat, islands)
@@ -701,6 +915,14 @@ function App() {
 
       current.landStatus = finalSeaState
 
+      current.wind = {
+        direction: wind?.direction ?? current.wind?.direction ?? 0,
+        strength: wind?.strength ?? current.wind?.strength ?? 0,
+        angleToWind: relativeWindDegrees,
+        multiplier: windMultiplier,
+        isTacking: isTackingIntoWind,
+      }
+
       current.wakeTimer = (current.wakeTimer + dt * (0.8 + Math.min(current.speed / MAX_FORWARD_SPEED, 1) * 3)) % 1000
 
       boatRef.current = current
@@ -715,7 +937,12 @@ function App() {
       const dt = Math.min((timestamp - lastTimestamp) / 1000, 0.05)
       lastTimestamp = timestamp
 
-      const boat = updateBoat(dt)
+      const nextWind = updateWindState(windRef.current, dt, windRandomRef.current)
+      windRef.current = nextWind
+      setWindState(nextWind)
+
+      const boat = updateBoat(dt, nextWind)
+      simulationTimeRef.current += dt
       updateWaves(wavesRef.current, dt)
       shorelineTimeRef.current = (shorelineTimeRef.current + dt) % 1000
       drawScene(
@@ -725,6 +952,8 @@ function App() {
         islands,
         wavesRef.current,
         shorelineTimeRef.current,
+        nextWind,
+        simulationTimeRef.current,
       )
 
       if (isMiniMapVisible) {
@@ -945,8 +1174,21 @@ function App() {
 
   const speedKnots = Math.round(boatState.speed)
   const headingDegrees = Math.round(
-    (((boatState.heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (180 / Math.PI),
+    (((boatState.heading % TWO_PI) + TWO_PI) % TWO_PI) * (180 / Math.PI),
   )
+  const windStrength = clamp(windState.strength ?? 0, 0, 1)
+  const windSpeedKnots = Math.round(
+    lerp(WIND_SPEED_BASE_KNOTS, WIND_SPEED_MAX_KNOTS, windStrength),
+  )
+  const windDirectionDegrees = Math.round(
+    (((windState.direction % TWO_PI) + TWO_PI) % TWO_PI) * (180 / Math.PI),
+  )
+  const windDirectionLabel = getCardinalDirection(windDirectionDegrees)
+  const relativeWindAngle = boatState.wind?.angleToWind ?? 0
+  const relativeWindDescription = boatState.wind?.isTacking
+    ? 'Tacking'
+    : getRelativeWindDescription(relativeWindAngle)
+  const windStatSubtitle = `${windDirectionLabel} · ${relativeWindDescription}`
 
   return (
     <div className="app">
@@ -1031,6 +1273,19 @@ function App() {
             <div className="ship-stat">
               <span className="ship-stat-label">Speed</span>
               <span className="ship-stat-value">{speedKnots} kn</span>
+            </div>
+            <div className="ship-stat ship-stat--wind">
+              <span className="ship-stat-label">Wind</span>
+              <span className="ship-stat-value wind-value">
+                <span className="wind-speed">{windSpeedKnots} kn</span>
+                <span className="ship-stat-sub">{windStatSubtitle}</span>
+                <span className="wind-compass" aria-hidden="true">
+                  <span
+                    className="wind-compass-arrow"
+                    style={{ transform: `rotate(${windDirectionDegrees}deg)` }}
+                  />
+                </span>
+              </span>
             </div>
             <div className="ship-stat">
               <span className="ship-stat-label">Top Speed</span>
@@ -1304,7 +1559,7 @@ function updateWaves(waves, dt) {
   }
 }
 
-function drawScene(ctx, viewport, boat, islands, waves, shorelineTime) {
+function drawScene(ctx, viewport, boat, islands, waves, shorelineTime, wind, time) {
   const { width, height } = viewport
   const camera = {
     x: boat.x - width / 2,
@@ -1315,8 +1570,66 @@ function drawScene(ctx, viewport, boat, islands, waves, shorelineTime) {
   paintSea(ctx, width, height, camera, waves)
   drawIslands(ctx, islands, camera, shorelineTime)
   drawBoatWake(ctx, boat, camera)
+  drawWindIndicators(ctx, { width, height }, wind, time)
   drawBoat(ctx, boat, camera)
   addVignette(ctx, width, height)
+}
+
+function drawWindIndicators(ctx, viewport, wind, time) {
+  if (!wind) {
+    return
+  }
+
+  const strength = clamp(wind.strength ?? 0, 0, 1)
+  if (strength <= 0.01) {
+    return
+  }
+
+  const { width, height } = viewport
+  const spacing = 160
+  const rowSpacing = 110
+  const dx = Math.cos(wind.direction)
+  const dy = Math.sin(wind.direction)
+  const px = -dy
+  const py = dx
+  const travelSpeed = 30 + strength * 60
+  const length = 32 + strength * 48
+  const halfLength = length / 2
+  const baseAlpha = 0.14 + strength * 0.18
+  const lineWidth = 1.1 + strength * 0.9
+  const strokeColor = 'rgba(255, 255, 255, 0.7)'
+
+  ctx.save()
+  ctx.globalCompositeOperation = 'screen'
+  ctx.lineWidth = lineWidth
+  ctx.lineCap = 'round'
+  ctx.strokeStyle = strokeColor
+
+  let rowIndex = 0
+  for (let y = -rowSpacing; y <= height + rowSpacing; y += rowSpacing) {
+    let colIndex = 0
+    for (let x = -spacing; x <= width + spacing; x += spacing) {
+      const baseX = x + (rowIndex % 2) * spacing * 0.5
+      const jitterSample = pseudoRandom2D(colIndex * 5.371 + 1, rowIndex * 9.137 + 5)
+      const jitter = (jitterSample - 0.5) * spacing * 0.4
+      const travelSample = pseudoRandom2D(colIndex * 8.913 + 7, rowIndex * 4.271 + 11)
+      const travel =
+        ((time * travelSpeed + travelSample * spacing) % spacing + spacing) % spacing - spacing / 2
+      const centerX = baseX + dx * travel + px * jitter * 0.6
+      const centerY = y + dy * travel + py * jitter * 0.6
+      const brightness = 0.6 + pseudoRandom2D(colIndex * 3.19 + 13, rowIndex * 7.31 + 2) * 0.4
+
+      ctx.globalAlpha = baseAlpha * brightness
+      ctx.beginPath()
+      ctx.moveTo(centerX - dx * halfLength, centerY - dy * halfLength)
+      ctx.lineTo(centerX + dx * halfLength, centerY + dy * halfLength)
+      ctx.stroke()
+      colIndex += 1
+    }
+    rowIndex += 1
+  }
+
+  ctx.restore()
 }
 
 function drawMiniMap(ctx, boat, islands) {
