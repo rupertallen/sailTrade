@@ -481,6 +481,7 @@ function App() {
   const canvasRef = useRef(null)
   const miniMapRef = useRef(null)
   const pressedKeys = useRef(new Set())
+  const repairClicksRef = useRef(0)
   const [seed, setSeed] = useState(() => generateRandomSeed())
   const [seedInput, setSeedInput] = useState(seed)
   const [copyStatus, setCopyStatus] = useState('')
@@ -516,6 +517,7 @@ function App() {
     setBoatState(resetState)
     pressedKeys.current.clear()
     shorelineTimeRef.current = 0
+    repairClicksRef.current = 0
   }, [seed])
 
   useEffect(() => {
@@ -757,6 +759,66 @@ function App() {
   }, [height, width, islands, isMiniMapVisible])
 
   useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) {
+      return undefined
+    }
+
+    const handlePointerDown = (event) => {
+      if (event.button !== 0) {
+        return
+      }
+
+      const rect = canvas.getBoundingClientRect()
+      const cssX = event.clientX - rect.left
+      const cssY = event.clientY - rect.top
+      const dpr = window.devicePixelRatio || 1
+      const canvasX = cssX * dpr
+      const canvasY = cssY * dpr
+
+      const currentBoat = boatRef.current
+      const cameraX = currentBoat.x - canvas.width / 2
+      const cameraY = currentBoat.y - canvas.height / 2
+      const worldPoint = {
+        x: cameraX + canvasX,
+        y: cameraY + canvasY,
+      }
+
+      const boatPolygon = getBoatHullPolygon(currentBoat)
+      const isOnBoat = isPointInsidePolygon(worldPoint, boatPolygon)
+
+      if (!isOnBoat) {
+        return
+      }
+
+      if (currentBoat.health >= 1) {
+        repairClicksRef.current = 0
+        return
+      }
+
+      repairClicksRef.current += 1
+
+      if (repairClicksRef.current >= 3) {
+        repairClicksRef.current -= 3
+        setBoatState((existing) => {
+          const healedHealth = Math.min(1, existing.health + 0.05)
+          if (healedHealth === existing.health) {
+            return existing
+          }
+          const updated = { ...existing, health: healedHealth }
+          boatRef.current = updated
+          return updated
+        })
+      }
+    }
+
+    canvas.addEventListener('pointerdown', handlePointerDown)
+    return () => {
+      canvas.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [])
+
+  useEffect(() => {
     const miniMapCanvas = miniMapRef.current
     if (!miniMapCanvas) {
       return
@@ -952,9 +1014,13 @@ function App() {
           {activeMenu === 'instructions' && (
             <div className="top-menu-content">
               <div className="menu-instructions">
-                Catch the wind with <strong>↑</strong>/<strong>W</strong>, ease the sails with <strong>↓</strong>/<strong>S</strong>, and steer using
-                {' '}
-                <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong>.
+                <p>
+                  Catch the wind with <strong>↑</strong>/<strong>W</strong>, ease the sails with <strong>↓</strong>/<strong>S</strong>, and steer using{' '}
+                  <strong>←</strong>/<strong>→</strong> or <strong>A</strong>/<strong>D</strong>.
+                </p>
+                <p>
+                  When the hull is battered, click directly on your ship to patch it up. Every third click restores 5% of the lost durability, up to a sound vessel.
+                </p>
               </div>
             </div>
           )}
@@ -1036,6 +1102,15 @@ function getBoatCollisionSamples(boat) {
   }
 
   return samples
+}
+
+function getBoatHullPolygon(boat) {
+  const cos = Math.cos(boat.heading)
+  const sin = Math.sin(boat.heading)
+  return BOAT_COLLISION_OUTLINE.map((point) => ({
+    x: boat.x + point.x * cos - point.y * sin,
+    y: boat.y + point.x * sin + point.y * cos,
+  }))
 }
 
 function isPointInsidePolygon(point, polygon) {
