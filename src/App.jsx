@@ -629,6 +629,7 @@ function App() {
   const [activeMenu, setActiveMenu] = useState(null)
   const [isMiniMapVisible, setMiniMapVisible] = useState(false)
   const [isWeatherVisible, setWeatherVisible] = useState(true)
+  const [isWeatherEnabled, setWeatherEnabled] = useState(true)
   const copyTimeoutRef = useRef(null)
 
   const seedData = useMemo(() => {
@@ -916,12 +917,22 @@ function App() {
 
       current.landStatus = finalSeaState
 
-      current.wind = {
-        direction: wind?.direction ?? current.wind?.direction ?? 0,
-        strength: wind?.strength ?? current.wind?.strength ?? 0,
-        angleToWind: relativeWindDegrees,
-        multiplier: windMultiplier,
-        isTacking: isTackingIntoWind,
+      if (wind) {
+        current.wind = {
+          direction: wind.direction ?? 0,
+          strength: wind.strength ?? 0,
+          angleToWind: relativeWindDegrees,
+          multiplier: windMultiplier,
+          isTacking: isTackingIntoWind,
+        }
+      } else {
+        current.wind = {
+          direction: 0,
+          strength: 0,
+          angleToWind: 0,
+          multiplier: 1,
+          isTacking: false,
+        }
       }
 
       current.wakeTimer = (current.wakeTimer + dt * (0.8 + Math.min(current.speed / MAX_FORWARD_SPEED, 1) * 3)) % 1000
@@ -942,7 +953,8 @@ function App() {
       windRef.current = nextWind
       setWindState(nextWind)
 
-      const boat = updateBoat(dt, nextWind)
+      const appliedWind = isWeatherEnabled ? nextWind : null
+      const boat = updateBoat(dt, appliedWind)
       simulationTimeRef.current += dt
       updateWaves(wavesRef.current, dt)
       shorelineTimeRef.current = (shorelineTimeRef.current + dt) % 1000
@@ -953,7 +965,7 @@ function App() {
         islands,
         wavesRef.current,
         shorelineTimeRef.current,
-        nextWind,
+        appliedWind,
         simulationTimeRef.current,
       )
 
@@ -986,7 +998,7 @@ function App() {
     return () => {
       cancelAnimationFrame(animationFrame)
     }
-  }, [height, width, islands, isMiniMapVisible])
+  }, [height, width, islands, isMiniMapVisible, isWeatherEnabled])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -1108,6 +1120,17 @@ function App() {
 
   const handleMenuToggle = (menuKey) => {
     setActiveMenu((current) => (current === menuKey ? null : menuKey))
+  }
+
+  const handleWeatherEnabledChange = (event) => {
+    const nextEnabled = event.target.checked
+    if (nextEnabled) {
+      setWeatherEnabled(true)
+      setWeatherVisible(true)
+    } else {
+      setWeatherEnabled(false)
+      setWeatherVisible(false)
+    }
   }
 
   const shipStatus = useMemo(() => {
@@ -1238,13 +1261,13 @@ function App() {
   ])
 
   const miniMapStyle = useMemo(() => {
-    if (!isWeatherVisible) {
+    if (!isWeatherVisible || !isWeatherEnabled) {
       return undefined
     }
     return {
       '--mini-map-bottom-extra': 'calc(var(--mini-map-panel-height) + 1.25rem)',
     }
-  }, [isWeatherVisible])
+  }, [isWeatherVisible, isWeatherEnabled])
 
   return (
     <div className="app">
@@ -1270,11 +1293,20 @@ function App() {
               </button>
               <button
                 type="button"
-                className={`menu-toggle-button ${isWeatherVisible ? 'is-active' : ''}`}
-                onClick={() => setWeatherVisible((value) => !value)}
+                className={`menu-toggle-button ${activeMenu === 'options' ? 'is-active' : ''}`}
+                onClick={() => handleMenuToggle('options')}
               >
-                Weather
+                Options
               </button>
+              {isWeatherEnabled && (
+                <button
+                  type="button"
+                  className={`menu-toggle-button ${isWeatherVisible ? 'is-active' : ''}`}
+                  onClick={() => setWeatherVisible((value) => !value)}
+                >
+                  Weather
+                </button>
+              )}
               <button
                 type="button"
                 className={`menu-toggle-button ${isMiniMapVisible ? 'is-active' : ''}`}
@@ -1284,6 +1316,23 @@ function App() {
               </button>
             </div>
           </div>
+          {activeMenu === 'options' && (
+            <div className="top-menu-content">
+              <div className="options-menu">
+                <label className="options-toggle">
+                  <input
+                    type="checkbox"
+                    checked={isWeatherEnabled}
+                    onChange={handleWeatherEnabledChange}
+                  />
+                  <span className="options-toggle-label">Weather Effects</span>
+                </label>
+                <p className="options-description">
+                  Disable to sail without wind influence or weather indicators.
+                </p>
+              </div>
+            </div>
+          )}
           {activeMenu === 'seed' && (
             <div className="top-menu-content">
               <form className="seed-form" onSubmit={handleSeedSubmit}>
@@ -1331,7 +1380,7 @@ function App() {
           )}
         </div>
         <div className="bottom-panels">
-          {isWeatherVisible && (
+          {isWeatherEnabled && isWeatherVisible && (
             <div className="weather-panel glass-panel hud-panel">
               <div className="weather-title">Weather</div>
               <div className="weather-stats">
@@ -1699,8 +1748,8 @@ function drawWindIndicators(ctx, viewport, wind, time) {
       const travelSample = pseudoRandom2D(colIndex * 8.913 + 7, rowIndex * 4.271 + 11)
       const travel =
         ((time * travelSpeed + travelSample * spacing) % spacing + spacing) % spacing - spacing / 2
-      const centerX = baseX + dx * travel + px * jitter * 0.6
-      const centerY = y + dy * travel + py * jitter * 0.6
+      const centerX = baseX - dx * travel + px * jitter * 0.6
+      const centerY = y - dy * travel + py * jitter * 0.6
       const brightness = 0.6 + pseudoRandom2D(colIndex * 3.19 + 13, rowIndex * 7.31 + 2) * 0.4
 
       ctx.globalAlpha = baseAlpha * brightness
