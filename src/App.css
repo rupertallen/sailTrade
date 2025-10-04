@@ -270,6 +270,77 @@
   color: rgba(240, 245, 248, 0.7);
 }
 
+.wind-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.wind-value .ship-stat-sub {
+  margin-left: 0;
+}
+
+.wind-speed {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.wind-compass {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.12), rgba(4, 35, 51, 0.65));
+  box-shadow: inset 0 8px 18px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.25);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+}
+
+.wind-compass::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wind-compass-arrow {
+  position: relative;
+  width: 2px;
+  height: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 170, 94, 0.85));
+  border-radius: 999px;
+  transform-origin: 50% 85%;
+  transition: transform 0.25s ease-out;
+}
+
+.wind-compass-arrow::after {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 7px solid rgba(255, 209, 156, 0.95);
+}
+
+.wind-compass-arrow::before {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.4);
+}
+
 @media (max-width: 900px) {
   .ui-layer {
     padding: 1.2rem 1.2rem 1.6rem;
@@ -345,6 +416,22 @@
 
   .ship-stat-value {
     font-size: 1rem;
+  }
+
+  .wind-value {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+
+  .wind-compass {
+    width: 30px;
+    height: 30px;
+    padding: 5px;
+  }
+
+  .wind-compass-arrow {
+    height: 14px;
   }
 
   .mini-map-wrapper {
