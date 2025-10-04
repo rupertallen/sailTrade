@@ -257,8 +257,8 @@
 }
 
 .world-map-wrapper {
-  flex: 1;
-  width: 100%;
+  align-self: center;
+  width: min(100%, 1100px);
   display: flex;
   justify-content: center;
   padding: 1.25rem 0 1.5rem;
@@ -266,8 +266,8 @@
 }
 
 .world-map-panel.hud-panel {
-  flex: 1;
-  width: min(100%, 1100px);
+  width: 100%;
+  max-width: 1100px;
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
@@ -348,6 +348,295 @@
 
 .world-map-canvas.is-panning {
   cursor: grabbing;
+}
+
+.settlement-wrapper {
+  align-self: center;
+  width: min(100%, 1100px);
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem 0 1.5rem;
+  pointer-events: none;
+}
+
+.settlement-panel {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding: 1.2rem 1.6rem 1.6rem;
+  pointer-events: auto;
+}
+
+.settlement-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.settlement-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settlement-name {
+  font-size: clamp(1.5rem, 1.3vw + 1.4rem, 2.4rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffe7bd;
+  text-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+.settlement-meta {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(240, 245, 248, 0.72);
+}
+
+.settlement-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(255, 222, 178, 0.18);
+  border: 1px solid rgba(255, 222, 178, 0.32);
+  color: #ffe7bd;
+}
+
+.settlement-population {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.settlement-population strong {
+  font-size: 0.9rem;
+  color: #fff4d0;
+}
+
+.settlement-leave {
+  padding: 0.55rem 1.2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: linear-gradient(135deg, rgba(255, 210, 148, 0.82), rgba(255, 184, 110, 0.76));
+  color: #15323c;
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.settlement-leave:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 239, 210, 0.65);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.settlement-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.4rem;
+  align-items: stretch;
+}
+
+.settlement-illustration {
+  position: relative;
+  flex: 1 1 320px;
+  min-width: 260px;
+  aspect-ratio: 4 / 3;
+  border-radius: 22px;
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(30, 74, 102, 0.9), rgba(8, 32, 42, 0.95));
+  box-shadow: inset 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+
+.settlement-illustration::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid rgba(214, 237, 255, 0.2);
+  pointer-events: none;
+}
+
+.settlement-illustration-sky,
+.settlement-illustration-water,
+.settlement-illustration-harbor,
+.settlement-illustration-dock {
+  position: absolute;
+  inset: 0;
+}
+
+.settlement-illustration-sky {
+  background: linear-gradient(180deg, rgba(255, 235, 205, 0.45), rgba(255, 198, 132, 0.1));
+  height: 55%;
+}
+
+.settlement-illustration-water {
+  bottom: 0;
+  height: 42%;
+  background: linear-gradient(180deg, rgba(22, 82, 114, 0.9), rgba(6, 30, 42, 0.95));
+}
+
+.settlement-illustration-harbor {
+  bottom: 28%;
+  height: 26%;
+  margin: 0 18%;
+  border-radius: 0 0 60% 60% / 0 0 100% 100%;
+  background: linear-gradient(180deg, rgba(226, 194, 146, 0.9), rgba(180, 140, 92, 0.85));
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.45);
+}
+
+.settlement-illustration-dock {
+  bottom: 32%;
+  left: 50%;
+  width: 28%;
+  height: 32%;
+  transform: translateX(-50%);
+  border-radius: 14px;
+  background: linear-gradient(90deg, rgba(120, 74, 32, 0.9), rgba(156, 104, 58, 0.85));
+  box-shadow: 0 16px 25px rgba(0, 0, 0, 0.35);
+}
+
+.settlement-illustration-buildings {
+  position: absolute;
+  bottom: 35%;
+  left: 12%;
+  right: 12%;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 0.8rem;
+}
+
+.settlement-building {
+  position: relative;
+  flex: 1;
+  min-width: 56px;
+  height: 48%;
+  border-radius: 10px 10px 6px 6px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.settlement-building::after {
+  content: '';
+  position: absolute;
+  top: -26%;
+  left: -6%;
+  right: -6%;
+  height: 42%;
+  border-radius: 999px 999px 14px 14px;
+  background: linear-gradient(180deg, rgba(255, 241, 210, 0.92), rgba(218, 169, 102, 0.85));
+  box-shadow: inset 0 -4px 8px rgba(0, 0, 0, 0.25);
+}
+
+.settlement-building--hall {
+  background: linear-gradient(180deg, rgba(156, 122, 78, 0.95), rgba(112, 76, 44, 0.9));
+}
+
+.settlement-building--shop {
+  background: linear-gradient(180deg, rgba(120, 166, 118, 0.95), rgba(72, 118, 86, 0.9));
+}
+
+.settlement-building--market {
+  background: linear-gradient(180deg, rgba(196, 122, 112, 0.95), rgba(146, 76, 70, 0.9));
+}
+
+.settlement-illustration-people {
+  position: absolute;
+  bottom: 18%;
+  left: 14%;
+  right: 14%;
+  height: 32px;
+}
+
+.settlement-person {
+  position: absolute;
+  bottom: 0;
+  width: 12px;
+  height: 18px;
+  border-radius: 6px 6px 4px 4px;
+  background: linear-gradient(180deg, rgba(255, 230, 180, 0.95), rgba(220, 162, 108, 0.92));
+  box-shadow: 0 8px 15px rgba(0, 0, 0, 0.35);
+}
+
+.settlement-person::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 241, 214, 0.95);
+}
+
+.settlement-person--1 {
+  background: linear-gradient(180deg, rgba(196, 234, 255, 0.92), rgba(120, 168, 210, 0.92));
+}
+
+.settlement-person--2 {
+  background: linear-gradient(180deg, rgba(220, 198, 255, 0.92), rgba(150, 110, 198, 0.9));
+}
+
+.settlement-details {
+  flex: 1 1 240px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  color: rgba(240, 245, 248, 0.9);
+}
+
+.settlement-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.settlement-detail-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(240, 245, 248, 0.6);
+}
+
+.settlement-detail-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #fff2cf;
+}
+
+.settlement-description {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: rgba(240, 245, 248, 0.78);
+}
+
+.settlement-panel--harbor-town .settlement-building {
+  height: 52%;
+}
+
+.settlement-panel--port-town .settlement-building {
+  height: 58%;
+}
+
+.settlement-panel--port-town .settlement-illustration {
+  aspect-ratio: 5 / 3;
 }
 
 .bottom-panels {
@@ -525,6 +814,14 @@
     --mini-map-panel-height: clamp(4.5rem, 18vh, 6.5rem);
     --mini-map-bottom-base: calc(1.9rem + var(--mini-map-panel-height));
   }
+
+  .settlement-body {
+    flex-direction: column;
+  }
+
+  .settlement-illustration {
+    min-width: 100%;
+  }
 }
 
 @media (max-width: 600px) {
@@ -550,6 +847,18 @@
   .seed-button {
     flex: 1 1 90px;
     text-align: center;
+  }
+
+  .settlement-name {
+    font-size: clamp(1.3rem, 1.2vw + 1.2rem, 1.9rem);
+  }
+
+  .settlement-meta {
+    font-size: 0.78rem;
+  }
+
+  .settlement-illustration {
+    aspect-ratio: 3 / 2;
   }
 
   .seed-hint {
