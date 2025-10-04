@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
-const MAP_SIZE = 10000
+const MAP_SIZE = 12000
+const MIN_SETTLEMENT_COUNT = 5
 const ISLAND_COUNT = 16
 const MIN_ISLAND_GAP = 900
 const MAP_EDGE_CLEARANCE = 900
@@ -61,6 +62,14 @@ const MAX_BOAT_EXTENT = BOAT_COLLISION_OUTLINE.reduce(
   (max, point) => Math.max(max, Math.hypot(point.x, point.y)),
   0,
 )
+
+const BOAT_LENGTH =
+  Math.max(...BOAT_COLLISION_OUTLINE.map((point) => point.x)) -
+  Math.min(...BOAT_COLLISION_OUTLINE.map((point) => point.x))
+const BOAT_WIDTH =
+  Math.max(...BOAT_COLLISION_OUTLINE.map((point) => point.y)) -
+  Math.min(...BOAT_COLLISION_OUTLINE.map((point) => point.y))
+const HOUSE_MAX_DIMENSION = BOAT_LENGTH / 3
 
 const MINIMAP_WORLD_RADIUS = 2200
 const COLLISION_EDGE_THRESHOLD = 10
@@ -149,25 +158,25 @@ const SETTLEMENT_SIZE_OPTIONS = [
   {
     id: 'village',
     label: 'Seaside Village',
-    minRadius: 560,
+    minRadius: 320,
     populationRange: [260, 640],
-    buildingRange: [4, 6],
+    buildingRange: [10, 16],
     dockLengthMultiplier: 0.52,
   },
   {
     id: 'harbor-town',
     label: 'Harbor Town',
-    minRadius: 680,
+    minRadius: 560,
     populationRange: [720, 1480],
-    buildingRange: [6, 9],
+    buildingRange: [18, 28],
     dockLengthMultiplier: 0.6,
   },
   {
     id: 'port-town',
     label: 'Port Town',
-    minRadius: 780,
+    minRadius: 700,
     populationRange: [1600, 3200],
-    buildingRange: [9, 13],
+    buildingRange: [30, 44],
     dockLengthMultiplier: 0.68,
   },
 ]
@@ -184,6 +193,7 @@ const SETTLEMENT_NAME_SUFFIXES = [
 ]
 
 const SETTLEMENT_MARKET_THEMES = ['Spice', 'Timber', 'Fish', 'Sails', 'Charts', 'Trade']
+const SETTLEMENT_DECOR_TYPES = ['crate', 'barrel', 'cart', 'stack', 'firepit', 'drying-rack']
 
 function generateRandomSeed() {
   if (typeof crypto !== 'undefined' && crypto?.getRandomValues) {
@@ -728,10 +738,27 @@ function findPointClosestToAngle(points, angle) {
   return best
 }
 
+function averagePoint(points) {
+  if (!points?.length) {
+    return { x: 0, y: 0 }
+  }
+
+  const sum = points.reduce(
+    (acc, point) => {
+      acc.x += point.x
+      acc.y += point.y
+      return acc
+    },
+    { x: 0, y: 0 },
+  )
+
+  return { x: sum.x / points.length, y: sum.y / points.length }
+}
+
 function createDockStructure(angle, coastlinePoint, radius, sizeProfile, random) {
   const direction = { x: Math.cos(angle), y: Math.sin(angle) }
-  const length = radius * (sizeProfile.dockLengthMultiplier + random() * 0.12)
-  const width = radius * 0.12 + 40 + random() * 40
+  const length = BOAT_LENGTH * 3
+  const width = BOAT_WIDTH
   const retract = Math.min(radius * 0.08, 60)
   const landwardBase = {
     x: coastlinePoint.x - direction.x * retract,
@@ -762,14 +789,16 @@ function createDockStructure(angle, coastlinePoint, radius, sizeProfile, random)
     },
   ]
 
+  const berthFactor = 0.55 + (random?.() ?? Math.random()) * 0.1
+  const approachMultiplier = 1.2 + (random?.() ?? Math.random()) * 0.3
   const berthPoint = {
-    x: landwardBase.x + direction.x * (length * 0.78),
-    y: landwardBase.y + direction.y * (length * 0.78),
+    x: landwardBase.x + direction.x * (length * berthFactor),
+    y: landwardBase.y + direction.y * (length * berthFactor),
   }
 
   const approachPoint = {
-    x: outerEnd.x + direction.x * 180,
-    y: outerEnd.y + direction.y * 180,
+    x: outerEnd.x + direction.x * (BOAT_LENGTH * approachMultiplier),
+    y: outerEnd.y + direction.y * (BOAT_LENGTH * approachMultiplier),
   }
 
   return {
@@ -783,15 +812,18 @@ function createDockStructure(angle, coastlinePoint, radius, sizeProfile, random)
   }
 }
 
-function generateSettlementForIsland(island, random, usedNames) {
+function generateSettlementForIsland(island, random, usedNames, options = {}) {
+  const { force = false } = options
   const candidates = SETTLEMENT_SIZE_OPTIONS.filter((option) => island.radius >= option.minRadius)
   if (!candidates.length) {
     return null
   }
 
-  const spawnChance = Math.min(0.82, 0.45 + (island.radius - candidates[0].minRadius) / 1400)
-  if (random() > spawnChance) {
-    return null
+  if (!force) {
+    const spawnChance = Math.min(0.82, 0.45 + (island.radius - candidates[0].minRadius) / 1400)
+    if (random() > spawnChance) {
+      return null
+    }
   }
 
   const choice = candidates[Math.floor(random() * candidates.length)]
@@ -799,68 +831,180 @@ function generateSettlementForIsland(island, random, usedNames) {
   const coastlinePoint = findPointClosestToAngle(island.coastline, placementAngle)
   const dock = createDockStructure(placementAngle, coastlinePoint, island.radius, choice, random)
 
-  const settlementRadius = coastlinePoint.radius * 0.62
+  const settlementRadius = coastlinePoint.radius * 0.48
   const center = {
     x: Math.cos(placementAngle) * settlementRadius,
     y: Math.sin(placementAngle) * settlementRadius,
   }
 
-  const plazaRadius = 60 + island.radius * 0.08
+  const plazaRadius = Math.max(34, 36 + island.radius * 0.05)
   const roadEnd = {
-    x: dock.landwardBase.x + dock.direction.x * 24,
-    y: dock.landwardBase.y + dock.direction.y * 24,
+    x: dock.landwardBase.x + dock.direction.x * 12,
+    y: dock.landwardBase.y + dock.direction.y * 12,
   }
 
   const buildingCountRange = choice.buildingRange
   const buildingCount = buildingCountRange[0] + Math.floor(random() * (buildingCountRange[1] - buildingCountRange[0] + 1))
-  const buildings = []
-  const maxPerRow = 3 + (choice.id === 'port-town' ? 1 : 0)
-  const spacing = 70 + island.radius * 0.05
+  const streetWidth = Math.max(12, HOUSE_MAX_DIMENSION * 0.35)
+  const columnStreetWidth = Math.max(10, streetWidth * 0.6)
+  const columnSpacing = HOUSE_MAX_DIMENSION * 0.95 + columnStreetWidth
+  const maxPerRow = 4 + (choice.id === 'port-town' ? 3 : choice.id === 'harbor-town' ? 2 : 1)
+
+  const rowPlans = []
+  let allocated = 0
+  while (allocated < buildingCount) {
+    const remaining = buildingCount - allocated
+    const rowCapacity = Math.min(maxPerRow, remaining)
+    const rowPlan = []
+    for (let column = 0; column < rowCapacity; column += 1) {
+      const depth = HOUSE_MAX_DIMENSION * (0.42 + random() * 0.32)
+      const width = HOUSE_MAX_DIMENSION * (0.46 + random() * 0.28)
+      const roofHeight = 16 + random() * 10 + rowPlans.length * 4
+      rowPlan.push({ depth, width, roofHeight, hueShift: random() })
+    }
+    rowPlans.push(rowPlan)
+    allocated += rowCapacity
+  }
+
   const direction = dock.direction
   const perpendicular = { x: -direction.y, y: direction.x }
+  const buildings = []
+  const rows = []
+  const streets = []
+  let offsetAlongDirection = 0
 
-  for (let i = 0; i < buildingCount; i += 1) {
-    const row = Math.floor(i / maxPerRow)
-    const column = i % maxPerRow
-    const offsetFromCenter = (column - (maxPerRow - 1) / 2) * spacing
-    const depth = 70 + random() * 55 + island.radius * 0.04
-    const width = 68 + random() * 40 + island.radius * 0.03
-    const rowSpacing = depth * 1.05 + 28
-    const anchor = {
-      x: center.x - direction.x * (row * rowSpacing),
-      y: center.y - direction.y * (row * rowSpacing),
+  for (let rowIndex = 0; rowIndex < rowPlans.length; rowIndex += 1) {
+    const rowPlan = rowPlans[rowIndex]
+    if (!rowPlan.length) {
+      continue
     }
-    const frontCenter = {
-      x: anchor.x + perpendicular.x * offsetFromCenter,
-      y: anchor.y + perpendicular.y * offsetFromCenter,
+
+    const rowDepth = Math.max(...rowPlan.map((plan) => plan.depth))
+    const anchorBase = {
+      x: center.x - direction.x * offsetAlongDirection,
+      y: center.y - direction.y * offsetAlongDirection,
     }
-    const halfWidth = width / 2
-    const forward = { x: -direction.x * depth, y: -direction.y * depth }
-    const left = { x: perpendicular.x * halfWidth, y: perpendicular.y * halfWidth }
-    const right = { x: -perpendicular.x * halfWidth, y: -perpendicular.y * halfWidth }
 
-    const frontLeft = { x: frontCenter.x + left.x, y: frontCenter.y + left.y }
-    const frontRight = { x: frontCenter.x + right.x, y: frontCenter.y + right.y }
-    const backLeft = { x: frontLeft.x + forward.x, y: frontLeft.y + forward.y }
-    const backRight = { x: frontRight.x + forward.x, y: frontRight.y + forward.y }
-    const height = 32 + random() * 18 + row * 6
+    const rowBuildings = []
+    for (let column = 0; column < rowPlan.length; column += 1) {
+      const plan = rowPlan[column]
+      const offsetFromCenter = (column - (rowPlan.length - 1) / 2) * columnSpacing
+      const frontCenter = {
+        x: anchorBase.x + perpendicular.x * offsetFromCenter,
+        y: anchorBase.y + perpendicular.y * offsetFromCenter,
+      }
+      const halfWidth = plan.width / 2
+      const forward = { x: -direction.x * plan.depth, y: -direction.y * plan.depth }
+      const left = { x: perpendicular.x * halfWidth, y: perpendicular.y * halfWidth }
+      const right = { x: -perpendicular.x * halfWidth, y: -perpendicular.y * halfWidth }
 
-    buildings.push({
-      footprint: [frontLeft, frontRight, backRight, backLeft],
-      roofHeight: height,
-      hueShift: random(),
+      const frontLeft = { x: frontCenter.x + left.x, y: frontCenter.y + left.y }
+      const frontRight = { x: frontCenter.x + right.x, y: frontCenter.y + right.y }
+      const backLeft = { x: frontLeft.x + forward.x, y: frontLeft.y + forward.y }
+      const backRight = { x: frontRight.x + forward.x, y: frontRight.y + forward.y }
+
+      const building = {
+        footprint: [frontLeft, frontRight, backRight, backLeft],
+        roofHeight: plan.roofHeight,
+        hueShift: plan.hueShift,
+        row: rowIndex,
+        column,
+      }
+
+      buildings.push(building)
+      rowBuildings.push(building)
+    }
+
+    rows[rowIndex] = rowBuildings
+    offsetAlongDirection += rowDepth + streetWidth
+  }
+
+  const streetColor = random() < 0.5 ? 'rgba(120, 108, 96, 0.78)' : 'rgba(102, 94, 84, 0.78)'
+  const streetBorder = 'rgba(52, 41, 31, 0.28)'
+
+  for (const rowBuildings of rows) {
+    if (!rowBuildings?.length) {
+      continue
+    }
+    for (let i = 0; i < rowBuildings.length - 1; i += 1) {
+      const left = rowBuildings[i]
+      const right = rowBuildings[i + 1]
+      streets.push({
+        polygon: [left.footprint[1], right.footprint[0], right.footprint[3], left.footprint[2]],
+      })
+    }
+  }
+
+  for (let rowIndex = 0; rowIndex < rows.length - 1; rowIndex += 1) {
+    const current = rows[rowIndex]
+    const next = rows[rowIndex + 1]
+    if (!current?.length || !next?.length) {
+      continue
+    }
+    streets.push({
+      polygon: [
+        averagePoint(current.map((building) => building.footprint[3])),
+        averagePoint(current.map((building) => building.footprint[2])),
+        averagePoint(next.map((building) => building.footprint[1])),
+        averagePoint(next.map((building) => building.footprint[0])),
+      ],
+    })
+  }
+
+  if (rows[0]?.length) {
+    const firstRow = rows[0]
+    const frontLeftAvg = averagePoint(firstRow.map((building) => building.footprint[0]))
+    const frontRightAvg = averagePoint(firstRow.map((building) => building.footprint[1]))
+    const connectorHalfWidth = streetWidth * 0.8
+    streets.push({
+      polygon: [
+        frontLeftAvg,
+        frontRightAvg,
+        {
+          x: roadEnd.x - perpendicular.x * connectorHalfWidth,
+          y: roadEnd.y - perpendicular.y * connectorHalfWidth,
+        },
+        {
+          x: roadEnd.x + perpendicular.x * connectorHalfWidth,
+          y: roadEnd.y + perpendicular.y * connectorHalfWidth,
+        },
+      ],
+    })
+  }
+
+  const decor = []
+  const detailCount = Math.min(30, Math.round(buildingCount * (0.5 + random() * 0.6)))
+  for (let i = 0; i < detailCount; i += 1) {
+    const building = buildings[Math.floor(random() * buildings.length)]
+    if (!building) {
+      continue
+    }
+
+    const [frontLeft, frontRight, backRight, backLeft] = building.footprint
+    const edgeMid = random() < 0.5 ? averagePoint([frontLeft, frontRight]) : averagePoint([backLeft, backRight])
+    const side = random() < 0.5 ? 1 : -1
+    const depthDirection = random() < 0.5 ? -1 : 1
+    const offsetAlongStreet = streetWidth * (0.35 + random() * 0.7)
+    const offsetDepth = streetWidth * (0.1 + random() * 0.5)
+
+    decor.push({
+      type: SETTLEMENT_DECOR_TYPES[Math.floor(random() * SETTLEMENT_DECOR_TYPES.length)],
+      x: edgeMid.x + perpendicular.x * side * offsetAlongStreet + direction.x * depthDirection * offsetDepth,
+      y: edgeMid.y + perpendicular.y * side * offsetAlongStreet + direction.y * depthDirection * offsetDepth,
+      rotation: random() * TWO_PI,
+      size: 6 + random() * 8,
     })
   }
 
   const people = []
-  const visitorCount = 3 + Math.floor(random() * 3) + (choice.id === 'port-town' ? 2 : 0)
+  const visitorCount = 4 + Math.floor(random() * 4) + Math.floor(buildingCount / 8)
   for (let i = 0; i < visitorCount; i += 1) {
     const theta = random() * TWO_PI
-    const distance = plazaRadius * 0.35 + random() * plazaRadius * 0.4
+    const distance = plazaRadius * 0.25 + random() * plazaRadius * 0.5
     people.push({
       x: center.x + Math.cos(theta) * distance,
       y: center.y + Math.sin(theta) * distance,
-      radius: 6 + random() * 4,
+      radius: 5 + random() * 3.5,
       tint: random(),
     })
   }
@@ -884,8 +1028,12 @@ function generateSettlementForIsland(island, random, usedNames) {
     dock,
     center,
     plazaRadius,
-    road: { start: center, end: roadEnd },
+    road: { start: center, end: roadEnd, width: streetWidth },
     buildings,
+    streets,
+    streetColor,
+    streetBorder,
+    decor,
     people,
     marketTheme,
   }
@@ -967,6 +1115,24 @@ function generateIslands(count, random = Math.random) {
     }
 
     islands.push(island)
+  }
+
+  let settlementCount = islands.filter((island) => island.settlement).length
+  if (settlementCount < MIN_SETTLEMENT_COUNT) {
+    const availableIslands = islands
+      .filter((island) => !island.settlement)
+      .sort((a, b) => b.radius - a.radius)
+    for (const island of availableIslands) {
+      if (settlementCount >= MIN_SETTLEMENT_COUNT) {
+        break
+      }
+      const forcedSettlement = generateSettlementForIsland(island, random, usedSettlementNames, { force: true })
+      if (forcedSettlement) {
+        island.settlement = forcedSettlement
+        island.structures.push({ type: 'dock', polygon: forcedSettlement.dock.polygon })
+        settlementCount += 1
+      }
+    }
   }
 
   return islands
@@ -2993,16 +3159,6 @@ function drawSettlementStructures(ctx, island) {
     }
   }
 
-  if (settlement.road) {
-    ctx.strokeStyle = 'rgba(219, 188, 142, 0.82)'
-    ctx.lineWidth = Math.max(3, island.radius * 0.018)
-    ctx.lineCap = 'round'
-    ctx.beginPath()
-    ctx.moveTo(settlement.road.start.x, settlement.road.start.y)
-    ctx.lineTo(settlement.road.end.x, settlement.road.end.y)
-    ctx.stroke()
-  }
-
   if (settlement.plazaRadius > 0) {
     ctx.fillStyle = 'rgba(242, 214, 156, 0.48)'
     ctx.beginPath()
@@ -3010,6 +3166,46 @@ function drawSettlementStructures(ctx, island) {
     ctx.fill()
     ctx.strokeStyle = 'rgba(147, 104, 58, 0.38)'
     ctx.lineWidth = Math.max(2, island.radius * 0.012)
+    ctx.stroke()
+  }
+
+  if (settlement.streets?.length) {
+    const streetColor = settlement.streetColor ?? 'rgba(120, 108, 96, 0.75)'
+    const streetBorder = settlement.streetBorder ?? 'rgba(52, 41, 31, 0.25)'
+    ctx.lineJoin = 'round'
+    for (const street of settlement.streets) {
+      const polygon = street?.polygon
+      if (!polygon?.length) {
+        continue
+      }
+      ctx.beginPath()
+      ctx.moveTo(polygon[0].x, polygon[0].y)
+      for (let i = 1; i < polygon.length; i += 1) {
+        const point = polygon[i]
+        ctx.lineTo(point.x, point.y)
+      }
+      ctx.closePath()
+      ctx.fillStyle = street.color ?? streetColor
+      ctx.fill()
+      ctx.strokeStyle = streetBorder
+      ctx.lineWidth = Math.max(1.2, island.radius * 0.006)
+      ctx.stroke()
+    }
+  }
+
+  if (settlement.road) {
+    const streetColor = settlement.streetColor ?? 'rgba(120, 108, 96, 0.75)'
+    const streetBorder = settlement.streetBorder ?? 'rgba(52, 41, 31, 0.25)'
+    const roadWidth = Math.max(settlement.road.width ?? 0, island.radius * 0.016)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(settlement.road.start.x, settlement.road.start.y)
+    ctx.lineTo(settlement.road.end.x, settlement.road.end.y)
+    ctx.strokeStyle = streetColor
+    ctx.lineWidth = roadWidth
+    ctx.stroke()
+    ctx.strokeStyle = streetBorder
+    ctx.lineWidth = Math.max(1.4, roadWidth * 0.18)
     ctx.stroke()
   }
 
@@ -3028,7 +3224,7 @@ function drawSettlementStructures(ctx, island) {
       }
       ctx.closePath()
       const baseHue = 26 + building.hueShift * 42 + (settlement.sizeId === 'port-town' ? 10 : 0)
-      const lightness = 58 - building.hueShift * 8
+      const lightness = 62 - building.hueShift * 10
       ctx.fillStyle = `hsl(${baseHue}, 58%, ${lightness}%)`
       ctx.fill()
       ctx.strokeStyle = 'rgba(52, 36, 22, 0.4)'
@@ -3050,6 +3246,126 @@ function drawSettlementStructures(ctx, island) {
       ctx.closePath()
       ctx.fillStyle = `hsla(${baseHue + 10}, 70%, 72%, 0.6)`
       ctx.fill()
+    }
+  }
+
+  if (settlement.decor?.length) {
+    for (const item of settlement.decor) {
+      ctx.save()
+      ctx.translate(item.x, item.y)
+      ctx.rotate(item.rotation)
+      const size = item.size ?? 8
+      switch (item.type) {
+        case 'crate':
+        case 'stack': {
+          const crateSize = size
+          ctx.fillStyle = 'rgba(138, 104, 66, 0.92)'
+          ctx.fillRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
+          ctx.strokeStyle = 'rgba(64, 42, 24, 0.55)'
+          ctx.lineWidth = Math.max(1, crateSize * 0.16)
+          ctx.strokeRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
+          ctx.strokeStyle = 'rgba(196, 164, 122, 0.45)'
+          ctx.lineWidth = Math.max(0.8, crateSize * 0.08)
+          ctx.beginPath()
+          ctx.moveTo(-crateSize / 2, 0)
+          ctx.lineTo(crateSize / 2, 0)
+          ctx.moveTo(0, -crateSize / 2)
+          ctx.lineTo(0, crateSize / 2)
+          ctx.stroke()
+          if (item.type === 'stack') {
+            ctx.strokeStyle = 'rgba(84, 56, 30, 0.35)'
+            ctx.lineWidth = Math.max(0.7, crateSize * 0.06)
+            ctx.beginPath()
+            ctx.moveTo(-crateSize / 2, -crateSize / 4)
+            ctx.lineTo(crateSize / 2, -crateSize / 4)
+            ctx.moveTo(-crateSize / 2, crateSize / 4)
+            ctx.lineTo(crateSize / 2, crateSize / 4)
+            ctx.stroke()
+          }
+          break
+        }
+        case 'barrel': {
+          const radius = size * 0.5
+          ctx.fillStyle = 'rgba(120, 82, 48, 0.92)'
+          ctx.beginPath()
+          ctx.ellipse(0, 0, radius, radius * 0.7, 0, 0, TWO_PI)
+          ctx.fill()
+          ctx.strokeStyle = 'rgba(54, 32, 18, 0.5)'
+          ctx.lineWidth = Math.max(1, radius * 0.35)
+          ctx.stroke()
+          ctx.strokeStyle = 'rgba(200, 168, 120, 0.4)'
+          ctx.lineWidth = Math.max(0.8, radius * 0.2)
+          ctx.beginPath()
+          ctx.moveTo(-radius * 0.8, 0)
+          ctx.lineTo(radius * 0.8, 0)
+          ctx.stroke()
+          break
+        }
+        case 'cart': {
+          const cartWidth = size * 1.4
+          const cartHeight = size * 0.6
+          ctx.fillStyle = 'rgba(150, 110, 66, 0.9)'
+          ctx.fillRect(-cartWidth / 2, -cartHeight / 2, cartWidth, cartHeight)
+          ctx.strokeStyle = 'rgba(74, 46, 24, 0.55)'
+          ctx.lineWidth = Math.max(0.8, cartHeight * 0.5)
+          ctx.strokeRect(-cartWidth / 2, -cartHeight / 2, cartWidth, cartHeight)
+          const wheelRadius = Math.max(2.5, size * 0.4)
+          ctx.fillStyle = 'rgba(70, 48, 30, 0.9)'
+          ctx.beginPath()
+          ctx.arc(-cartWidth / 2 + wheelRadius, cartHeight / 2 + wheelRadius * 0.4, wheelRadius, 0, TWO_PI)
+          ctx.arc(cartWidth / 2 - wheelRadius, cartHeight / 2 + wheelRadius * 0.4, wheelRadius, 0, TWO_PI)
+          ctx.fill()
+          break
+        }
+        case 'firepit': {
+          const outer = size * 0.7
+          ctx.fillStyle = 'rgba(64, 46, 32, 0.9)'
+          ctx.beginPath()
+          ctx.arc(0, 0, outer, 0, TWO_PI)
+          ctx.fill()
+          ctx.fillStyle = 'rgba(252, 178, 82, 0.7)'
+          ctx.beginPath()
+          ctx.arc(0, 0, outer * 0.55, 0, TWO_PI)
+          ctx.fill()
+          ctx.fillStyle = 'rgba(255, 236, 180, 0.6)'
+          ctx.beginPath()
+          ctx.arc(0, -outer * 0.1, outer * 0.35, 0, TWO_PI)
+          ctx.fill()
+          break
+        }
+        case 'drying-rack': {
+          const rackWidth = size * 1.6
+          const rackHeight = size * 0.9
+          ctx.strokeStyle = 'rgba(122, 88, 52, 0.8)'
+          ctx.lineWidth = Math.max(0.9, rackHeight * 0.25)
+          ctx.beginPath()
+          ctx.moveTo(-rackWidth / 2, rackHeight / 2)
+          ctx.lineTo(-rackWidth / 2, -rackHeight / 2)
+          ctx.moveTo(rackWidth / 2, rackHeight / 2)
+          ctx.lineTo(rackWidth / 2, -rackHeight / 2)
+          ctx.stroke()
+          ctx.strokeStyle = 'rgba(196, 180, 150, 0.65)'
+          ctx.lineWidth = Math.max(0.7, rackHeight * 0.18)
+          ctx.beginPath()
+          ctx.moveTo(-rackWidth / 2, -rackHeight / 3)
+          ctx.lineTo(rackWidth / 2, -rackHeight / 3)
+          ctx.moveTo(-rackWidth / 2, 0)
+          ctx.lineTo(rackWidth / 2, 0)
+          ctx.moveTo(-rackWidth / 2, rackHeight / 3)
+          ctx.lineTo(rackWidth / 2, rackHeight / 3)
+          ctx.stroke()
+          break
+        }
+        default: {
+          const markerRadius = size * 0.5
+          ctx.fillStyle = 'rgba(130, 112, 88, 0.8)'
+          ctx.beginPath()
+          ctx.arc(0, 0, markerRadius, 0, TWO_PI)
+          ctx.fill()
+          break
+        }
+      }
+      ctx.restore()
     }
   }
 
