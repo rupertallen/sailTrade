@@ -1539,7 +1539,7 @@ function App() {
       shorelineTimeRef.current = (shorelineTimeRef.current + dt) % 1000
       drawScene(
         ctx,
-        { width: canvas.width, height: canvas.height },
+        { width, height },
         boat,
         islands,
         appliedWind,
