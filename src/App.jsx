@@ -73,8 +73,6 @@ const HOUSE_MAX_DIMENSION = BOAT_LENGTH / 3
 
 const MINIMAP_WORLD_RADIUS = 2200
 const COLLISION_EDGE_THRESHOLD = 10
-const islandTextureCache = new WeakMap()
-
 const NAME_SYLLABLE_PREFIXES = [
   'Ash',
   'Beck',
@@ -436,33 +434,6 @@ function pseudoRandom2D(x, y) {
   return value - Math.floor(value)
 }
 
-function isAngleBetween(angle, start, end) {
-  const diff = normalizeAngle(end - start)
-  const offset = normalizeAngle(angle - start)
-  return offset <= diff
-}
-
-function hexToRgba(hex, alpha) {
-  const normalized = hex.replace('#', '')
-  const parseValue = (value) => value * 17
-  let r
-  let g
-  let b
-
-  if (normalized.length === 3) {
-    r = parseValue(parseInt(normalized[0], 16))
-    g = parseValue(parseInt(normalized[1], 16))
-    b = parseValue(parseInt(normalized[2], 16))
-  } else {
-    const intValue = parseInt(normalized, 16)
-    r = (intValue >> 16) & 255
-    g = (intValue >> 8) & 255
-    b = intValue & 255
-  }
-
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
 function generateCoastlineShape(radius, random = Math.random) {
   const segments = 46 + Math.floor(random() * 20)
   const mainPhase = random() * TWO_PI
@@ -550,34 +521,6 @@ function generateCliffs(random = Math.random) {
     })
   }
   return cliffs
-}
-
-function generateTreeClusters(canopyPoints, radius, random = Math.random) {
-  const clusterCount = 4 + Math.floor(random() * 6)
-  const clusters = []
-
-  for (let i = 0; i < clusterCount; i += 1) {
-    const anchor = canopyPoints[Math.floor(random() * canopyPoints.length)]
-    const clusterRadius = radius * (0.09 + random() * 0.14)
-    const treeCount = 10 + Math.floor(random() * 18)
-    const trees = []
-
-    for (let j = 0; j < treeCount; j += 1) {
-      const angle = random() * TWO_PI
-      const distance = Math.sqrt(random()) * clusterRadius
-      const x = anchor.x + Math.cos(angle) * distance
-      const y = anchor.y + Math.sin(angle) * distance
-      const size = radius * (0.024 + random() * 0.045)
-      const type = random() < 0.45 ? 'conifer' : 'broadleaf'
-      const lean = (random() - 0.5) * 0.6
-      const layers = type === 'conifer' ? 3 + Math.floor(random() * 3) : 2 + Math.floor(random() * 2)
-      trees.push({ x, y, size, type, lean, layers })
-    }
-
-    clusters.push({ trees })
-  }
-
-  return clusters
 }
 
 function generateStreams(coastline, radius, random = Math.random) {
@@ -1599,8 +1542,6 @@ function App() {
         { width: canvas.width, height: canvas.height },
         boat,
         islands,
-        wavesRef.current,
-        shorelineTimeRef.current,
         appliedWind,
         simulationTimeRef.current,
       )
@@ -2155,7 +2096,7 @@ function App() {
     <div className="app">
       <canvas ref={canvasRef} className="world-canvas" />
       <div className="ui-layer">
-        <div className={`top-menu glass-panel ${activeMenu ? 'top-menu--expanded' : ''}`}>
+        <div className={`top-menu ${activeMenu ? 'top-menu--expanded' : ''}`}>
           <div className="top-menu-header">
             <div className="menu-brand">SailTrade</div>
             <div className="menu-actions">
@@ -2286,11 +2227,10 @@ function App() {
         </div>
         {isWorldMapVisible && (
           <div className="world-map-wrapper">
-            <div className="world-map-panel glass-panel hud-panel">
+            <div className="world-map-panel hud-panel">
               <div className="world-map-toolbar">
-                <div className="world-map-title">Sea Chart</div>
+                <div className="world-map-title">World Chart</div>
                 <div className="world-map-actions">
-                  <span className="world-map-hint">Drag to pan · Scroll to zoom · Press M to close</span>
                   <button
                     type="button"
                     className="world-map-close"
@@ -2309,7 +2249,7 @@ function App() {
         {dockedSettlement && (
           <div className="settlement-wrapper">
             <div
-              className={`settlement-panel glass-panel hud-panel settlement-panel--${dockedSettlement.sizeId}`}
+              className={`settlement-panel settlement-panel--${dockedSettlement.sizeId}`}
             >
               <div className="settlement-header">
                 <div className="settlement-heading">
@@ -2380,7 +2320,7 @@ function App() {
         )}
         <div className="bottom-panels">
           {isWeatherEnabled && isWeatherVisible && (
-            <div className="weather-panel glass-panel hud-panel">
+            <div className="weather-panel hud-panel">
               <div className="weather-title">Weather</div>
               <div className="weather-stats">
                 <div className="weather-stat">
@@ -2408,7 +2348,7 @@ function App() {
               </div>
             </div>
           )}
-          <div className="ship-panel glass-panel hud-panel">
+          <div className="ship-panel hud-panel">
             <div className="ship-title">Ship</div>
             <div className="ship-stats">
               <div className="ship-stat">
@@ -2710,20 +2650,189 @@ function updateWaves(waves, dt) {
   }
 }
 
-function drawScene(ctx, viewport, boat, islands, waves, shorelineTime, wind, time) {
+function drawScene(ctx, viewport, boat, islands, wind, time) {
   const { width, height } = viewport
   const camera = {
     x: boat.x - width / 2,
     y: boat.y - height / 2,
   }
 
-  ctx.imageSmoothingEnabled = false
-  paintSea(ctx, width, height, camera, waves)
-  drawIslands(ctx, islands, camera, shorelineTime)
+  paintSea(ctx, width, height)
+  drawIslands(ctx, islands, camera)
   drawBoatWake(ctx, boat, camera)
-  drawWindIndicators(ctx, { width, height }, wind, time)
+  if (wind) drawWindIndicators(ctx, { width, height }, wind, time)
   drawBoat(ctx, boat, camera)
-  addVignette(ctx, width, height)
+}
+
+function buildSmoothPath(points) {
+  const path = new Path2D()
+  if (!points?.length) return path
+  const first = points[0]
+  const last = points[points.length - 1]
+  path.moveTo((first.x + last.x) / 2, (first.y + last.y) / 2)
+  for (let i = 0; i < points.length; i += 1) {
+    const current = points[i]
+    const next = points[(i + 1) % points.length]
+    path.quadraticCurveTo(current.x, current.y, (current.x + next.x) / 2, (current.y + next.y) / 2)
+  }
+  path.closePath()
+  return path
+}
+
+function drawIslands(ctx, islands, camera) {
+  for (const island of islands) {
+    const screenX = island.x - camera.x
+    const screenY = island.y - camera.y
+    if (
+      screenX < -island.radius * 2 ||
+      screenX > ctx.canvas.width + island.radius * 2 ||
+      screenY < -island.radius * 2 ||
+      screenY > ctx.canvas.height + island.radius * 2
+    ) {
+      continue
+    }
+
+    ctx.save()
+    ctx.translate(screenX, screenY)
+    ctx.lineJoin = 'round'
+    ctx.lineCap = 'round'
+
+    const coastPath = buildSmoothPath(island.coastline)
+    const grassPath = buildSmoothPath(island.grass)
+
+    ctx.fillStyle = '#c4aa82'
+    ctx.fill(coastPath)
+
+    ctx.fillStyle = '#6e9960'
+    ctx.fill(grassPath)
+
+    ctx.strokeStyle = 'rgba(26, 53, 80, 0.35)'
+    ctx.lineWidth = 1.5
+    ctx.stroke(coastPath)
+
+    if (island.settlement) {
+      const c = island.settlement.center
+      ctx.fillStyle = '#d44820'
+      ctx.beginPath()
+      ctx.arc(c.x, c.y, Math.max(4, island.radius * 0.012), 0, TWO_PI)
+      ctx.fill()
+    }
+
+    ctx.restore()
+  }
+}
+
+function drawBoatWake(ctx, boat, camera) {
+  const wakeStrength = Math.min(boat.speed / MAX_FORWARD_SPEED, 1)
+  if (wakeStrength <= 0.02) return
+
+  const screenX = boat.x - camera.x
+  const screenY = boat.y - camera.y
+
+  ctx.save()
+  ctx.translate(screenX, screenY)
+  ctx.rotate(boat.heading)
+
+  const wakeLength = 80 + wakeStrength * 100
+  const wakeWidth = 14 + wakeStrength * 24
+
+  ctx.globalAlpha = 0.18 * wakeStrength
+  ctx.fillStyle = '#ffffff'
+  ctx.beginPath()
+  ctx.moveTo(-8, wakeWidth * 0.5)
+  ctx.quadraticCurveTo(-wakeLength * 0.5, wakeWidth * 0.7, -wakeLength, 0)
+  ctx.quadraticCurveTo(-wakeLength * 0.5, -wakeWidth * 0.7, -8, -wakeWidth * 0.5)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.globalAlpha = 0.12 * wakeStrength
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = 1
+  for (let i = 1; i <= 2; i += 1) {
+    const t = i / 2
+    const rx = -16 - t * (wakeLength - 20)
+    const rw = wakeWidth * (0.4 + t * 0.7)
+    ctx.beginPath()
+    ctx.moveTo(rx, -rw)
+    ctx.quadraticCurveTo(rx - wakeLength * 0.04, 0, rx, rw)
+    ctx.stroke()
+  }
+
+  ctx.globalAlpha = 1
+  ctx.restore()
+}
+
+function drawBoat(ctx, boat, camera) {
+  const screenX = boat.x - camera.x
+  const screenY = boat.y - camera.y
+  ctx.save()
+  ctx.translate(screenX, screenY)
+  ctx.rotate(boat.heading)
+
+  const speed = clamp(boat.speed / MAX_FORWARD_SPEED, 0, 1)
+
+  // Wake glow when moving
+  if (speed > 0.05) {
+    ctx.globalAlpha = 0.12 * speed
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.moveTo(-10, 18 * speed)
+    ctx.lineTo(-50 * speed, 0)
+    ctx.lineTo(-10, -18 * speed)
+    ctx.closePath()
+    ctx.fill()
+    ctx.globalAlpha = 1
+  }
+
+  // Hull
+  ctx.fillStyle = '#ddd0ba'
+  ctx.strokeStyle = 'rgba(12, 24, 36, 0.8)'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.moveTo(52, 0)
+  ctx.lineTo(16, -18)
+  ctx.lineTo(-42, -16)
+  ctx.lineTo(-46, 0)
+  ctx.lineTo(-42, 16)
+  ctx.lineTo(16, 18)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  // Deck line
+  ctx.strokeStyle = 'rgba(12, 24, 36, 0.35)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(46, 0)
+  ctx.lineTo(-40, 0)
+  ctx.stroke()
+
+  // Sail
+  const sail = clamp(boat.sailLevel ?? 0, 0, 1)
+  if (sail > 0.05) {
+    const eased = sail * sail * (3 - 2 * sail)
+    const w = 8 + eased * 16
+    ctx.globalAlpha = 0.25 + eased * 0.65
+    ctx.fillStyle = '#f0ece4'
+    ctx.strokeStyle = 'rgba(12,24,36,0.3)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(10, 0)
+    ctx.lineTo(10 - w, -22)
+    ctx.lineTo(10 - w, 22)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
+  // Bow marker
+  ctx.fillStyle = '#e8a030'
+  ctx.beginPath()
+  ctx.arc(40, 0, 3, 0, TWO_PI)
+  ctx.fill()
+
+  ctx.restore()
 }
 
 function drawWindIndicators(ctx, viewport, wind, time) {
@@ -2783,6 +2892,138 @@ function drawWindIndicators(ctx, viewport, wind, time) {
   ctx.restore()
 }
 
+function drawGlobeMap(ctx, cx, cy, R, boat, islands, options = {}) {
+  const { showLabels = false } = options
+
+  // World-to-sphere mapping: x→lon, y→lat (y flipped)
+  // lon ∈ [-60°, 60°], lat ∈ [-50°, 50°] — all points visible in front hemisphere
+  const toSphere = (wx, wy) => ({
+    lon: ((wx / MAP_SIZE) - 0.5) * (Math.PI * 2 / 3),
+    lat: (0.5 - (wy / MAP_SIZE)) * (Math.PI * 5 / 9),
+  })
+
+  // Orthographic projection centered at equator
+  const project = (lon, lat) => ({
+    x: cx + R * Math.cos(lat) * Math.sin(lon),
+    y: cy - R * Math.sin(lat),
+  })
+
+  // Ocean background
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(cx, cy, R, 0, TWO_PI)
+  ctx.fillStyle = '#1a3550'
+  ctx.fill()
+  ctx.clip()
+
+  // Graticule
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)'
+  ctx.lineWidth = 0.5
+  for (let latDeg = -40; latDeg <= 40; latDeg += 20) {
+    const lat = latDeg * Math.PI / 180
+    ctx.beginPath()
+    for (let lonDeg = -60; lonDeg <= 60; lonDeg += 3) {
+      const p = project(lonDeg * Math.PI / 180, lat)
+      lonDeg === -60 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)
+    }
+    ctx.stroke()
+  }
+  for (let lonDeg = -60; lonDeg <= 60; lonDeg += 20) {
+    const lon = lonDeg * Math.PI / 180
+    ctx.beginPath()
+    for (let latDeg = -50; latDeg <= 50; latDeg += 3) {
+      const p = project(lon, latDeg * Math.PI / 180)
+      latDeg === -50 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)
+    }
+    ctx.stroke()
+  }
+
+  // Islands
+  for (const island of islands) {
+    if (!island.coastline?.length) continue
+
+    // Coastline
+    ctx.beginPath()
+    island.coastline.forEach((pt, i) => {
+      const sp = toSphere(island.x + pt.x, island.y + pt.y)
+      const p = project(sp.lon, sp.lat)
+      i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)
+    })
+    ctx.closePath()
+    ctx.fillStyle = '#c4aa82'
+    ctx.fill()
+
+    // Interior
+    if (island.grass?.length) {
+      ctx.beginPath()
+      island.grass.forEach((pt, i) => {
+        const sp = toSphere(island.x + pt.x, island.y + pt.y)
+        const p = project(sp.lon, sp.lat)
+        i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)
+      })
+      ctx.closePath()
+      ctx.fillStyle = '#6e9960'
+      ctx.fill()
+    }
+
+    // Settlement dot
+    if (island.settlement) {
+      const sc = island.settlement.center
+      const sp = toSphere(island.x + sc.x, island.y + sc.y)
+      const p = project(sp.lon, sp.lat)
+      const dotR = Math.max(2, R * 0.018)
+      ctx.fillStyle = '#d44820'
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, dotR, 0, TWO_PI)
+      ctx.fill()
+
+      if (showLabels && R > 100) {
+        const fontSize = Math.round(clamp(R * 0.052, 9, 14))
+        ctx.font = `${fontSize}px system-ui, sans-serif`
+        ctx.fillStyle = '#c8bba8'
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(island.settlement.name, p.x + dotR + 3, p.y)
+      }
+    }
+  }
+
+  // Boat position
+  if (boat) {
+    const sp = toSphere(boat.x, boat.y)
+    const p = project(sp.lon, sp.lat)
+    const markerR = Math.max(3, R * 0.025)
+
+    ctx.fillStyle = '#e8a030'
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, markerR, 0, TWO_PI)
+    ctx.fill()
+
+    // Heading line
+    const cos = Math.cos(boat.heading)
+    const sin = Math.sin(boat.heading)
+    const spAhead = toSphere(boat.x + cos * 600, boat.y + sin * 600)
+    const pAhead = project(spAhead.lon, spAhead.lat)
+    ctx.strokeStyle = '#e8a030'
+    ctx.lineWidth = 1
+    ctx.globalAlpha = 0.7
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y)
+    ctx.lineTo(pAhead.x, pAhead.y)
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
+  ctx.restore()
+
+  // Globe outline
+  ctx.beginPath()
+  ctx.arc(cx, cy, R, 0, TWO_PI)
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)'
+  ctx.lineWidth = 1
+  ctx.stroke()
+}
+
 function drawMiniMap(ctx, boat, islands) {
   const dpr = window.devicePixelRatio || 1
   ctx.save()
@@ -2792,121 +3033,11 @@ function drawMiniMap(ctx, boat, islands) {
   const height = ctx.canvas.height / dpr
   ctx.clearRect(0, 0, width, height)
 
-  const centerX = width / 2
-  const centerY = height / 2
-  const mapRadius = Math.max(40, Math.min(centerX, centerY) - 12)
-  const outerRadius = mapRadius + 4
-  const scale = mapRadius / MINIMAP_WORLD_RADIUS
+  const cx = width / 2
+  const cy = height / 2
+  const R = Math.min(cx, cy) - 2
 
-  ctx.fillStyle = 'rgba(4, 28, 42, 0.78)'
-  ctx.fillRect(0, 0, width, height)
-
-  ctx.beginPath()
-  ctx.arc(centerX, centerY, outerRadius, 0, TWO_PI)
-  ctx.fillStyle = 'rgba(6, 44, 60, 0.92)'
-  ctx.fill()
-
-  ctx.save()
-  ctx.beginPath()
-  ctx.arc(centerX, centerY, mapRadius, 0, TWO_PI)
-  ctx.clip()
-
-  ctx.fillStyle = 'rgba(13, 82, 112, 0.9)'
-  ctx.fillRect(centerX - mapRadius, centerY - mapRadius, mapRadius * 2, mapRadius * 2)
-
-  const traceRing = (points) => {
-    if (!points?.length) {
-      return false
-    }
-    ctx.beginPath()
-    const first = points[0]
-    ctx.moveTo(first.x * scale, first.y * scale)
-    for (let i = 1; i < points.length; i += 1) {
-      const point = points[i]
-      ctx.lineTo(point.x * scale, point.y * scale)
-    }
-    ctx.closePath()
-    return true
-  }
-
-  for (const island of islands) {
-    const dx = island.x - boat.x
-    const dy = island.y - boat.y
-    const distance = Math.hypot(dx, dy) - island.radius
-    if (distance > MINIMAP_WORLD_RADIUS) {
-      continue
-    }
-
-    ctx.save()
-    ctx.translate(centerX + dx * scale, centerY + dy * scale)
-
-    if (traceRing(island.coastline)) {
-      ctx.globalAlpha = 0.9
-      ctx.fillStyle = hexToRgba(island.palette.shore, 0.82)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.beach)) {
-      ctx.globalAlpha = 0.95
-      ctx.fillStyle = hexToRgba(island.palette.beach, 0.95)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.grass)) {
-      ctx.globalAlpha = 0.9
-      ctx.fillStyle = hexToRgba(island.palette.grass, 0.92)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.canopy)) {
-      ctx.globalAlpha = 0.85
-      ctx.fillStyle = hexToRgba(island.palette.canopy, 0.88)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.coastline)) {
-      ctx.strokeStyle = hexToRgba(island.palette.shore, 0.8)
-      ctx.lineWidth = Math.max(1, scale * 2.2)
-      ctx.stroke()
-    }
-
-    drawMiniMapSettlement(ctx, island, scale)
-
-    ctx.restore()
-  }
-
-  ctx.restore()
-
-  ctx.strokeStyle = 'rgba(224, 244, 255, 0.85)'
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.arc(centerX, centerY, mapRadius, 0, TWO_PI)
-  ctx.stroke()
-
-  ctx.strokeStyle = 'rgba(2, 12, 20, 0.88)'
-  ctx.lineWidth = 4
-  ctx.beginPath()
-  ctx.arc(centerX, centerY, outerRadius, 0, TWO_PI)
-  ctx.stroke()
-
-  ctx.save()
-  ctx.translate(centerX, centerY)
-  ctx.rotate(boat.heading)
-  ctx.fillStyle = '#ffe8a6'
-  ctx.beginPath()
-  ctx.moveTo(mapRadius * 0.32, 0)
-  ctx.lineTo(-mapRadius * 0.2, mapRadius * 0.16)
-  ctx.lineTo(-mapRadius * 0.2, -mapRadius * 0.16)
-  ctx.closePath()
-  ctx.fill()
-  ctx.strokeStyle = 'rgba(12, 30, 42, 0.85)'
-  ctx.lineWidth = 1.8
-  ctx.stroke()
-  ctx.restore()
+  drawGlobeMap(ctx, cx, cy, R, boat, islands, { showLabels: false })
 
   ctx.restore()
 }
@@ -2932,8 +3063,8 @@ function clampWorldMapView(state, width, height) {
   state.centerY = clamp(state.centerY ?? MAP_SIZE / 2, minY, maxY)
 }
 
-function drawWorldMap(canvas, state, boat, islands) {
-  if (!canvas || !state) {
+function drawWorldMap(canvas, _state, boat, islands) {
+  if (!canvas) {
     return
   }
 
@@ -2950,1425 +3081,40 @@ function drawWorldMap(canvas, state, boat, islands) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, width, height)
 
-  const background = ctx.createLinearGradient(0, 0, 0, height)
-  background.addColorStop(0, 'rgba(8, 52, 72, 0.95)')
-  background.addColorStop(1, 'rgba(4, 28, 42, 0.95)')
-  ctx.fillStyle = background
+  ctx.fillStyle = '#0c1824'
   ctx.fillRect(0, 0, width, height)
 
-  const scale = Math.max(state.scale || 0.02, 0.0001)
-  const centerX = state.centerX ?? MAP_SIZE / 2
-  const centerY = state.centerY ?? MAP_SIZE / 2
+  const R = Math.min(width, height) * 0.46
+  const cx = width / 2
+  const cy = height / 2
 
-  ctx.save()
-  const translateX = width / 2 - centerX * scale
-  const translateY = height / 2 - centerY * scale
-  ctx.translate(translateX, translateY)
-  ctx.scale(scale, scale)
-
-  ctx.fillStyle = 'rgba(9, 58, 80, 0.92)'
-  ctx.fillRect(0, 0, MAP_SIZE, MAP_SIZE)
-
-  ctx.strokeStyle = 'rgba(188, 224, 255, 0.16)'
-  ctx.lineWidth = Math.max(1 / scale, 0.6 / scale)
-  ctx.strokeRect(0, 0, MAP_SIZE, MAP_SIZE)
-
-  const traceRing = (points) => {
-    if (!points?.length) {
-      return false
-    }
-    ctx.beginPath()
-    ctx.moveTo(points[0].x, points[0].y)
-    for (let i = 1; i < points.length; i += 1) {
-      const point = points[i]
-      ctx.lineTo(point.x, point.y)
-    }
-    ctx.closePath()
-    return true
-  }
-
-  for (const island of islands) {
-    ctx.save()
-    ctx.translate(island.x, island.y)
-
-    if (traceRing(island.coastline)) {
-      ctx.globalAlpha = 0.92
-      ctx.fillStyle = hexToRgba(island.palette.shore, 0.86)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.beach)) {
-      ctx.globalAlpha = 0.95
-      ctx.fillStyle = hexToRgba(island.palette.beach, 0.94)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.grass)) {
-      ctx.globalAlpha = 0.9
-      ctx.fillStyle = hexToRgba(island.palette.grass, 0.92)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.canopy)) {
-      ctx.globalAlpha = 0.85
-      ctx.fillStyle = hexToRgba(island.palette.canopy, 0.88)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    if (traceRing(island.coastline)) {
-      ctx.strokeStyle = hexToRgba(island.palette.shore, 0.78)
-      ctx.lineWidth = Math.max(2.4 / scale, 1.2 / scale)
-      ctx.stroke()
-    }
-
-    drawSettlementStructures(ctx, island)
-
-    ctx.restore()
-  }
-
-  if (boat) {
-    ctx.save()
-    ctx.translate(boat.x, boat.y)
-    ctx.rotate(boat.heading ?? 0)
-    const hullLength = 140
-    const hullWidth = 68
-    ctx.fillStyle = '#ffe8a6'
-    ctx.beginPath()
-    ctx.moveTo(hullLength * 0.5, 0)
-    ctx.lineTo(-hullLength * 0.4, hullWidth * 0.45)
-    ctx.lineTo(-hullLength * 0.4, -hullWidth * 0.45)
-    ctx.closePath()
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(12, 32, 46, 0.82)'
-    ctx.lineWidth = Math.max(3.2 / scale, 1.6 / scale)
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.arc(0, 0, Math.max(12, 22 / scale), 0, TWO_PI)
-    ctx.fillStyle = 'rgba(255, 231, 189, 0.65)'
-    ctx.fill()
-    ctx.restore()
-  }
-
-  ctx.restore()
-
-  const toScreen = (x, y) => ({
-    x: (x - centerX) * scale + width / 2,
-    y: (y - centerY) * scale + height / 2,
-  })
-
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.lineJoin = 'round'
-
-  for (const island of islands) {
-    const screen = toScreen(island.x, island.y)
-    if (screen.x < -160 || screen.x > width + 160 || screen.y < -120 || screen.y > height + 160) {
-      continue
-    }
-
-    const fontSize = clamp(14 + (island.radius ?? 280) * scale * 0.22, 14, 30)
-    ctx.font = `${Math.round(fontSize)}px 'Cinzel', 'Georgia', serif`
-    const strokeWidth = Math.max(2, fontSize * 0.2)
-    ctx.lineWidth = strokeWidth
-    ctx.strokeStyle = 'rgba(6, 24, 34, 0.7)'
-    ctx.fillStyle = '#fff2cf'
-    ctx.strokeText(island.name ?? 'Isle', screen.x, screen.y)
-    ctx.fillText(island.name ?? 'Isle', screen.x, screen.y)
-  }
-
-  ctx.strokeStyle = 'rgba(224, 244, 255, 0.2)'
-  ctx.lineWidth = 2
-  ctx.strokeRect(2, 2, width - 4, height - 4)
+  drawGlobeMap(ctx, cx, cy, R, boat, islands, { showLabels: true })
 
   ctx.restore()
 }
 
-function paintSea(ctx, width, height, camera, waves) {
-  const gradient = ctx.createLinearGradient(0, 0, width, height)
-  gradient.addColorStop(0, '#2bb9c6')
-  gradient.addColorStop(0.55, '#1f9fb3')
-  gradient.addColorStop(1, '#0b4969')
-  ctx.fillStyle = gradient
+function paintSea(ctx, width, height) {
+  ctx.fillStyle = '#1a3550'
   ctx.fillRect(0, 0, width, height)
 
   ctx.save()
-  ctx.globalAlpha = 0.5
-  ctx.globalCompositeOperation = 'lighter'
-  for (const wave of waves) {
-    const screenX = wave.x - camera.x
-    const screenY = wave.y - camera.y
-    if (screenX < -wave.length || screenX > width + wave.length || screenY < -wave.length || screenY > height + wave.length) {
-      continue
-    }
-    const angle = Math.sin(wave.phase) * 0.6
-    ctx.save()
-    ctx.translate(screenX, screenY)
-    ctx.rotate(angle)
-    const waveGradient = ctx.createLinearGradient(-wave.length / 2, 0, wave.length / 2, 0)
-    waveGradient.addColorStop(0, 'rgba(160, 212, 255, 0)')
-    waveGradient.addColorStop(0.5, 'rgba(160, 212, 255, 0.22)')
-    waveGradient.addColorStop(1, 'rgba(160, 212, 255, 0)')
-    ctx.fillStyle = waveGradient
-    ctx.fillRect(-wave.length / 2, -wave.amplitude / 2, wave.length, wave.amplitude)
-    ctx.restore()
-  }
-  ctx.restore()
-}
-
-function drawSettlementStructures(ctx, island) {
-  const settlement = island.settlement
-  if (!settlement) {
-    return
-  }
-
-  ctx.save()
-
-  const dock = settlement.dock
-  if (dock?.polygon?.length) {
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)'
+  ctx.lineWidth = 1
+  const gridSize = 120
+  for (let x = 0; x < width; x += gridSize) {
     ctx.beginPath()
-    ctx.moveTo(dock.polygon[0].x, dock.polygon[0].y)
-    for (let i = 1; i < dock.polygon.length; i += 1) {
-      const point = dock.polygon[i]
-      ctx.lineTo(point.x, point.y)
-    }
-    ctx.closePath()
-    ctx.fillStyle = 'rgba(166, 108, 62, 0.92)'
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(70, 44, 26, 0.65)'
-    ctx.lineWidth = Math.max(2.5, island.radius * 0.014)
-    ctx.stroke()
-
-    const plankCount = Math.max(4, Math.round(dock.length / 60))
-    const step = dock.length / plankCount
-    const perpendicular = { x: -dock.direction.y, y: dock.direction.x }
-    ctx.strokeStyle = 'rgba(52, 31, 16, 0.38)'
-    ctx.lineWidth = Math.max(1.4, island.radius * 0.008)
-    for (let i = 1; i < plankCount; i += 1) {
-      const offset = step * i
-      const plankX = dock.landwardBase.x + dock.direction.x * offset
-      const plankY = dock.landwardBase.y + dock.direction.y * offset
-      const half = dock.width / 2
-      ctx.beginPath()
-      ctx.moveTo(plankX + perpendicular.x * half, plankY + perpendicular.y * half)
-      ctx.lineTo(plankX - perpendicular.x * half, plankY - perpendicular.y * half)
-      ctx.stroke()
-    }
-  }
-
-  if (settlement.plazaRadius > 0) {
-    ctx.fillStyle = 'rgba(242, 214, 156, 0.48)'
-    ctx.beginPath()
-    ctx.arc(settlement.center.x, settlement.center.y, settlement.plazaRadius, 0, TWO_PI)
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(147, 104, 58, 0.38)'
-    ctx.lineWidth = Math.max(2, island.radius * 0.012)
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x, height)
     ctx.stroke()
   }
-
-  if (settlement.streets?.length) {
-    const streetColor = settlement.streetColor ?? 'rgba(120, 108, 96, 0.75)'
-    const streetBorder = settlement.streetBorder ?? 'rgba(52, 41, 31, 0.25)'
-    ctx.lineJoin = 'round'
-    for (const street of settlement.streets) {
-      const polygon = street?.polygon
-      if (!polygon?.length) {
-        continue
-      }
-      ctx.beginPath()
-      ctx.moveTo(polygon[0].x, polygon[0].y)
-      for (let i = 1; i < polygon.length; i += 1) {
-        const point = polygon[i]
-        ctx.lineTo(point.x, point.y)
-      }
-      ctx.closePath()
-      ctx.fillStyle = street.color ?? streetColor
-      ctx.fill()
-      ctx.strokeStyle = streetBorder
-      ctx.lineWidth = Math.max(1.2, island.radius * 0.006)
-      ctx.stroke()
-    }
-  }
-
-  if (settlement.road) {
-    const streetColor = settlement.streetColor ?? 'rgba(120, 108, 96, 0.75)'
-    const streetBorder = settlement.streetBorder ?? 'rgba(52, 41, 31, 0.25)'
-    const roadWidth = Math.max(settlement.road.width ?? 0, island.radius * 0.016)
-    ctx.lineCap = 'round'
+  for (let y = 0; y < height; y += gridSize) {
     ctx.beginPath()
-    ctx.moveTo(settlement.road.start.x, settlement.road.start.y)
-    ctx.lineTo(settlement.road.end.x, settlement.road.end.y)
-    ctx.strokeStyle = streetColor
-    ctx.lineWidth = roadWidth
-    ctx.stroke()
-    ctx.strokeStyle = streetBorder
-    ctx.lineWidth = Math.max(1.4, roadWidth * 0.18)
-    ctx.stroke()
-  }
-
-  if (settlement.buildings?.length) {
-    for (const building of settlement.buildings) {
-      const footprint = building.footprint
-      if (!footprint?.length) {
-        continue
-      }
-
-      ctx.beginPath()
-      ctx.moveTo(footprint[0].x, footprint[0].y)
-      for (let i = 1; i < footprint.length; i += 1) {
-        const point = footprint[i]
-        ctx.lineTo(point.x, point.y)
-      }
-      ctx.closePath()
-      const baseHue = 26 + building.hueShift * 42 + (settlement.sizeId === 'port-town' ? 10 : 0)
-      const lightness = 62 - building.hueShift * 10
-      ctx.fillStyle = `hsl(${baseHue}, 58%, ${lightness}%)`
-      ctx.fill()
-      ctx.strokeStyle = 'rgba(52, 36, 22, 0.4)'
-      ctx.lineWidth = Math.max(1.4, island.radius * 0.006)
-      ctx.stroke()
-
-      const frontMid = {
-        x: (footprint[0].x + footprint[1].x) / 2,
-        y: (footprint[0].y + footprint[1].y) / 2,
-      }
-      const ridge = {
-        x: frontMid.x - settlement.dock.direction.x * building.roofHeight,
-        y: frontMid.y - settlement.dock.direction.y * building.roofHeight,
-      }
-      ctx.beginPath()
-      ctx.moveTo(footprint[0].x, footprint[0].y)
-      ctx.lineTo(ridge.x, ridge.y)
-      ctx.lineTo(footprint[1].x, footprint[1].y)
-      ctx.closePath()
-      ctx.fillStyle = `hsla(${baseHue + 10}, 70%, 72%, 0.6)`
-      ctx.fill()
-    }
-  }
-
-  if (settlement.decor?.length) {
-    for (const item of settlement.decor) {
-      ctx.save()
-      ctx.translate(item.x, item.y)
-      ctx.rotate(item.rotation)
-      const size = item.size ?? 8
-      switch (item.type) {
-        case 'crate':
-        case 'stack': {
-          const crateSize = size
-          ctx.fillStyle = 'rgba(138, 104, 66, 0.92)'
-          ctx.fillRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
-          ctx.strokeStyle = 'rgba(64, 42, 24, 0.55)'
-          ctx.lineWidth = Math.max(1, crateSize * 0.16)
-          ctx.strokeRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
-          ctx.strokeStyle = 'rgba(196, 164, 122, 0.45)'
-          ctx.lineWidth = Math.max(0.8, crateSize * 0.08)
-          ctx.beginPath()
-          ctx.moveTo(-crateSize / 2, 0)
-          ctx.lineTo(crateSize / 2, 0)
-          ctx.moveTo(0, -crateSize / 2)
-          ctx.lineTo(0, crateSize / 2)
-          ctx.stroke()
-          if (item.type === 'stack') {
-            ctx.strokeStyle = 'rgba(84, 56, 30, 0.35)'
-            ctx.lineWidth = Math.max(0.7, crateSize * 0.06)
-            ctx.beginPath()
-            ctx.moveTo(-crateSize / 2, -crateSize / 4)
-            ctx.lineTo(crateSize / 2, -crateSize / 4)
-            ctx.moveTo(-crateSize / 2, crateSize / 4)
-            ctx.lineTo(crateSize / 2, crateSize / 4)
-            ctx.stroke()
-          }
-          break
-        }
-        case 'barrel': {
-          const radius = size * 0.5
-          ctx.fillStyle = 'rgba(120, 82, 48, 0.92)'
-          ctx.beginPath()
-          ctx.ellipse(0, 0, radius, radius * 0.7, 0, 0, TWO_PI)
-          ctx.fill()
-          ctx.strokeStyle = 'rgba(54, 32, 18, 0.5)'
-          ctx.lineWidth = Math.max(1, radius * 0.35)
-          ctx.stroke()
-          ctx.strokeStyle = 'rgba(200, 168, 120, 0.4)'
-          ctx.lineWidth = Math.max(0.8, radius * 0.2)
-          ctx.beginPath()
-          ctx.moveTo(-radius * 0.8, 0)
-          ctx.lineTo(radius * 0.8, 0)
-          ctx.stroke()
-          break
-        }
-        case 'cart': {
-          const cartWidth = size * 1.4
-          const cartHeight = size * 0.6
-          ctx.fillStyle = 'rgba(150, 110, 66, 0.9)'
-          ctx.fillRect(-cartWidth / 2, -cartHeight / 2, cartWidth, cartHeight)
-          ctx.strokeStyle = 'rgba(74, 46, 24, 0.55)'
-          ctx.lineWidth = Math.max(0.8, cartHeight * 0.5)
-          ctx.strokeRect(-cartWidth / 2, -cartHeight / 2, cartWidth, cartHeight)
-          const wheelRadius = Math.max(2.5, size * 0.4)
-          ctx.fillStyle = 'rgba(70, 48, 30, 0.9)'
-          ctx.beginPath()
-          ctx.arc(-cartWidth / 2 + wheelRadius, cartHeight / 2 + wheelRadius * 0.4, wheelRadius, 0, TWO_PI)
-          ctx.arc(cartWidth / 2 - wheelRadius, cartHeight / 2 + wheelRadius * 0.4, wheelRadius, 0, TWO_PI)
-          ctx.fill()
-          break
-        }
-        case 'firepit': {
-          const outer = size * 0.7
-          ctx.fillStyle = 'rgba(64, 46, 32, 0.9)'
-          ctx.beginPath()
-          ctx.arc(0, 0, outer, 0, TWO_PI)
-          ctx.fill()
-          ctx.fillStyle = 'rgba(252, 178, 82, 0.7)'
-          ctx.beginPath()
-          ctx.arc(0, 0, outer * 0.55, 0, TWO_PI)
-          ctx.fill()
-          ctx.fillStyle = 'rgba(255, 236, 180, 0.6)'
-          ctx.beginPath()
-          ctx.arc(0, -outer * 0.1, outer * 0.35, 0, TWO_PI)
-          ctx.fill()
-          break
-        }
-        case 'drying-rack': {
-          const rackWidth = size * 1.6
-          const rackHeight = size * 0.9
-          ctx.strokeStyle = 'rgba(122, 88, 52, 0.8)'
-          ctx.lineWidth = Math.max(0.9, rackHeight * 0.25)
-          ctx.beginPath()
-          ctx.moveTo(-rackWidth / 2, rackHeight / 2)
-          ctx.lineTo(-rackWidth / 2, -rackHeight / 2)
-          ctx.moveTo(rackWidth / 2, rackHeight / 2)
-          ctx.lineTo(rackWidth / 2, -rackHeight / 2)
-          ctx.stroke()
-          ctx.strokeStyle = 'rgba(196, 180, 150, 0.65)'
-          ctx.lineWidth = Math.max(0.7, rackHeight * 0.18)
-          ctx.beginPath()
-          ctx.moveTo(-rackWidth / 2, -rackHeight / 3)
-          ctx.lineTo(rackWidth / 2, -rackHeight / 3)
-          ctx.moveTo(-rackWidth / 2, 0)
-          ctx.lineTo(rackWidth / 2, 0)
-          ctx.moveTo(-rackWidth / 2, rackHeight / 3)
-          ctx.lineTo(rackWidth / 2, rackHeight / 3)
-          ctx.stroke()
-          break
-        }
-        default: {
-          const markerRadius = size * 0.5
-          ctx.fillStyle = 'rgba(130, 112, 88, 0.8)'
-          ctx.beginPath()
-          ctx.arc(0, 0, markerRadius, 0, TWO_PI)
-          ctx.fill()
-          break
-        }
-      }
-      ctx.restore()
-    }
-  }
-
-  if (settlement.people?.length) {
-    ctx.lineWidth = Math.max(1.1, island.radius * 0.004)
-    for (const person of settlement.people) {
-      ctx.save()
-      ctx.translate(person.x, person.y)
-      ctx.fillStyle = `hsla(${200 + person.tint * 120}, 65%, 65%, 0.9)`
-      ctx.beginPath()
-      ctx.arc(0, -person.radius * 0.55, person.radius * 0.45, 0, TWO_PI)
-      ctx.fill()
-      ctx.fillStyle = `hsla(${20 + person.tint * 40}, 68%, 58%, 0.9)`
-      ctx.beginPath()
-      ctx.moveTo(-person.radius * 0.35, -person.radius * 0.2)
-      ctx.lineTo(person.radius * 0.35, -person.radius * 0.2)
-      ctx.lineTo(person.radius * 0.25, person.radius * 0.8)
-      ctx.lineTo(-person.radius * 0.25, person.radius * 0.8)
-      ctx.closePath()
-      ctx.fill()
-      ctx.restore()
-    }
-  }
-
-  ctx.restore()
-}
-
-function drawMiniMapSettlement(ctx, island, scale) {
-  const settlement = island.settlement
-  if (!settlement) {
-    return
-  }
-
-  const dock = settlement.dock
-  if (dock?.polygon?.length) {
-    ctx.beginPath()
-    ctx.moveTo(dock.polygon[0].x * scale, dock.polygon[0].y * scale)
-    for (let i = 1; i < dock.polygon.length; i += 1) {
-      const point = dock.polygon[i]
-      ctx.lineTo(point.x * scale, point.y * scale)
-    }
-    ctx.closePath()
-    ctx.fillStyle = 'rgba(187, 134, 78, 0.85)'
-    ctx.fill()
-  }
-
-  const harborRadius = Math.max(6, settlement.plazaRadius * scale * 0.35)
-  ctx.fillStyle = 'rgba(255, 224, 170, 0.95)'
-  ctx.beginPath()
-  ctx.arc(settlement.center.x * scale, settlement.center.y * scale, harborRadius, 0, TWO_PI)
-  ctx.fill()
-  ctx.strokeStyle = 'rgba(128, 88, 42, 0.6)'
-  ctx.lineWidth = Math.max(1, scale * 8)
-  ctx.stroke()
-}
-
-function drawIslands(ctx, islands, camera, shorelineTime = 0) {
-  for (const island of islands) {
-    const screenX = island.x - camera.x
-    const screenY = island.y - camera.y
-    if (screenX < -island.radius * 2 || screenX > ctx.canvas.width + island.radius * 2 || screenY < -island.radius * 2 || screenY > ctx.canvas.height + island.radius * 2) {
-      continue
-    }
-
-    ctx.save()
-    ctx.translate(screenX, screenY)
-    ctx.lineJoin = 'round'
-    ctx.lineCap = 'round'
-
-    const coastPath = buildSmoothPath(island.coastline)
-    const beachPath = buildSmoothPath(island.beach)
-    const grassPath = buildSmoothPath(island.grass)
-    const canopyPath = buildSmoothPath(island.canopy)
-
-    drawWaterHalo(ctx, island, coastPath)
-    drawShore(ctx, island, coastPath)
-    drawBeach(ctx, island, beachPath)
-    drawShorelineWaves(ctx, island, coastPath, beachPath, shorelineTime)
-    drawCliffs(ctx, island, coastPath)
-    drawGrass(ctx, island, grassPath)
-    addMeadowHighlights(ctx, island, grassPath)
-    drawStreamsOnIsland(ctx, island, grassPath)
-    drawCanopyBase(ctx, island, canopyPath)
-    drawTreeClusters(ctx, island, canopyPath)
-    drawSettlementStructures(ctx, island)
-
-    ctx.restore()
-  }
-}
-
-function drawBoatWake(ctx, boat, camera) {
-  const wakeStrength = Math.min(boat.speed / MAX_FORWARD_SPEED, 1)
-  if (wakeStrength <= 0.02) {
-    return
-  }
-
-  const screenX = boat.x - camera.x
-  const screenY = boat.y - camera.y
-
-  ctx.save()
-  ctx.translate(screenX, screenY)
-  ctx.rotate(boat.heading)
-
-  const wakeLength = 90 + wakeStrength * 120
-  const wakeWidth = 18 + wakeStrength * 32
-
-  ctx.globalCompositeOperation = 'lighter'
-  ctx.globalAlpha = 0.32 * wakeStrength
-  const wakeGradient = ctx.createLinearGradient(0, 0, -wakeLength, 0)
-  wakeGradient.addColorStop(0, 'rgba(200, 240, 255, 0.85)')
-  wakeGradient.addColorStop(1, 'rgba(200, 240, 255, 0)')
-  ctx.fillStyle = wakeGradient
-  ctx.beginPath()
-  ctx.moveTo(-10, wakeWidth * 0.55)
-  ctx.quadraticCurveTo(-wakeLength * 0.55, wakeWidth * 0.8, -wakeLength, 0)
-  ctx.quadraticCurveTo(-wakeLength * 0.55, -wakeWidth * 0.8, -10, -wakeWidth * 0.55)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.globalAlpha = 0.28 * wakeStrength
-  ctx.strokeStyle = 'rgba(225, 248, 255, 0.9)'
-  ctx.lineWidth = 2
-  for (let i = 1; i <= 3; i += 1) {
-    const t = i / 3
-    const rippleX = -18 - t * (wakeLength - 24)
-    const rippleWidth = wakeWidth * (0.5 + t * 0.7)
-    const pulse = Math.sin(boat.wakeTimer * 4 + i * 1.6) * 2
-    ctx.beginPath()
-    ctx.moveTo(rippleX, -rippleWidth + pulse)
-    ctx.quadraticCurveTo(rippleX - wakeLength * 0.04, 0, rippleX, rippleWidth - pulse)
-    ctx.stroke()
-  }
-
-  const sprayStrength = Math.min(boat.speed / (MAX_FORWARD_SPEED * 0.7), 1)
-  if (sprayStrength > 0.05) {
-    const eased = sprayStrength * sprayStrength * (3 - 2 * sprayStrength)
-
-    for (const side of [-1, 1]) {
-      ctx.globalAlpha = 0.26 * sprayStrength
-      ctx.fillStyle = 'rgba(214, 242, 255, 0.88)'
-      ctx.beginPath()
-      ctx.moveTo(48, side * 4)
-      ctx.quadraticCurveTo(40, side * (10 + eased * 8), 24, side * (16 + eased * 12))
-      ctx.lineTo(20, side * (12 + eased * 8))
-      ctx.quadraticCurveTo(36, side * (6 + eased * 6), 48, side * 2)
-      ctx.closePath()
-      ctx.fill()
-
-      ctx.globalAlpha = 0.42 * sprayStrength
-      ctx.strokeStyle = 'rgba(235, 252, 255, 0.95)'
-      ctx.lineWidth = 1.5 + eased * 1.2
-
-      for (let i = 0; i < 3; i += 1) {
-        const flow = i / 2.4
-        const startX = 50 - flow * 5.5
-        const startY = side * (3 + flow * 2.6)
-        const midX = 40 - eased * (8 + flow * 6)
-        const midY = side * (8 + eased * 10 + flow * 5.5)
-        const endX = 26 - eased * (11 + flow * 5.5)
-        const endY = side * (15 + eased * 14 + flow * 5.5)
-        ctx.beginPath()
-        ctx.moveTo(startX, startY)
-        ctx.quadraticCurveTo(midX, midY, endX, endY)
-        ctx.stroke()
-      }
-    }
-
-    ctx.globalAlpha = 0.3 * sprayStrength
-    ctx.strokeStyle = 'rgba(190, 226, 244, 0.8)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(44, 0)
-    ctx.quadraticCurveTo(32, 0, 18, 0)
-    ctx.stroke()
-
-    ctx.globalAlpha = 1
-  }
-
-  ctx.restore()
-}
-
-function drawBoat(ctx, boat, camera) {
-  const screenX = boat.x - camera.x
-  const screenY = boat.y - camera.y
-  ctx.save()
-  ctx.translate(screenX, screenY)
-  ctx.rotate(boat.heading)
-
-  drawBoatShadow(ctx, boat)
-  drawBoatHull(ctx)
-  drawDeckDetails(ctx)
-  drawAnchor(ctx, boat)
-  drawMastAndSails(ctx, boat)
-
-  ctx.restore()
-}
-
-function buildSmoothPath(points) {
-  const path = new Path2D()
-  if (points.length === 0) {
-    return path
-  }
-
-  const first = points[0]
-  const last = points[points.length - 1]
-  path.moveTo((first.x + last.x) / 2, (first.y + last.y) / 2)
-
-  for (let i = 0; i < points.length; i += 1) {
-    const current = points[i]
-    const next = points[(i + 1) % points.length]
-    const midX = (current.x + next.x) / 2
-    const midY = (current.y + next.y) / 2
-    path.quadraticCurveTo(current.x, current.y, midX, midY)
-  }
-
-  path.closePath()
-  return path
-}
-
-function getIslandTexture(ctx, island, type, config = {}) {
-  let cache = islandTextureCache.get(island)
-  if (!cache) {
-    cache = {}
-    islandTextureCache.set(island, cache)
-  }
-
-  let texture = cache[type]
-  if (!texture) {
-    const size = config.size ?? 160
-    const offscreen = document.createElement('canvas')
-    offscreen.width = size
-    offscreen.height = size
-    const textureCtx = offscreen.getContext('2d')
-
-    if (textureCtx) {
-      const rng = createSeededRng(`${island.id}-${type}-${island.textureSeed ?? 0}`)
-      const highlightColor = config.highlightColor ?? 'rgba(255, 255, 255, 0.3)'
-      const shadowColor = config.shadowColor ?? 'rgba(0, 0, 0, 0.35)'
-
-      if (config.baseColor) {
-        textureCtx.fillStyle = config.baseColor
-        textureCtx.globalAlpha = config.baseAlpha ?? 0.08
-        textureCtx.fillRect(0, 0, size, size)
-        textureCtx.globalAlpha = 1
-      }
-
-      const density = config.density ?? 0.018
-      const speckCount = Math.floor(size * size * density)
-      for (let i = 0; i < speckCount; i += 1) {
-        textureCtx.globalAlpha = (config.minAlpha ?? 0.05) + rng() * (config.maxAlpha ?? 0.22)
-        textureCtx.fillStyle = rng() < (config.highlightChance ?? 0.5) ? highlightColor : shadowColor
-        const radiusX = (config.dotSize ?? 1.4) * (0.4 + rng() * 1.8)
-        const radiusY = radiusX * (0.55 + rng() * 0.9)
-        const angle = rng() * TWO_PI
-        const x = rng() * size
-        const y = rng() * size
-        textureCtx.beginPath()
-        textureCtx.ellipse(x, y, radiusX, radiusY, angle, 0, TWO_PI)
-        textureCtx.fill()
-      }
-
-      if (config.accentColor) {
-        const accentCount = Math.floor(size * size * (config.accentDensity ?? 0.003))
-        textureCtx.strokeStyle = config.accentColor
-        textureCtx.lineWidth = config.accentWidth ?? 0.6
-        textureCtx.globalAlpha = config.accentAlpha ?? 0.14
-        for (let i = 0; i < accentCount; i += 1) {
-          const x = rng() * size
-          const y = rng() * size
-          const length = (config.accentLength ?? 12) * (0.3 + rng() * 1.2)
-          const angle = rng() * TWO_PI
-          textureCtx.beginPath()
-          textureCtx.moveTo(x, y)
-          textureCtx.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length)
-          textureCtx.stroke()
-        }
-        textureCtx.globalAlpha = 1
-      }
-
-      const offsetX = -rng() * size
-      const offsetY = -rng() * size
-      texture = {
-        offscreen,
-        pattern: null,
-        patternCanvas: null,
-        offsetX,
-        offsetY,
-      }
-    } else {
-      texture = {
-        offscreen,
-        pattern: null,
-        patternCanvas: null,
-        offsetX: 0,
-        offsetY: 0,
-      }
-    }
-
-    cache[type] = texture
-  }
-
-  if (!texture.pattern || texture.patternCanvas !== ctx.canvas) {
-    texture.pattern = ctx.createPattern(texture.offscreen, 'repeat')
-    texture.patternCanvas = ctx.canvas
-  }
-
-  return texture
-}
-
-function applyTexture(ctx, path, island, type, options = {}) {
-  const { opacity = 0.25, ...textureConfig } = options
-  const texture = getIslandTexture(ctx, island, type, textureConfig)
-  if (!texture?.pattern) {
-    return
-  }
-
-  ctx.save()
-  ctx.clip(path)
-  ctx.globalAlpha = opacity
-  ctx.translate(texture.offsetX, texture.offsetY)
-  ctx.fillStyle = texture.pattern
-  const extent = island.radius * 3
-  ctx.fillRect(-extent, -extent, extent * 2, extent * 2)
-  ctx.restore()
-}
-
-function drawShorelineWaves(ctx, island, coastPath, beachPath, time) {
-  const animation = island.waveAnimation ?? { offset: 0, speed: 1, dash: 16, glow: 0.3 }
-  const tidePhase = time * (0.35 + (animation.speed ?? 1) * 0.25) + animation.offset * 0.12
-  const retreatPhase = time * 0.65 + animation.offset * 0.22
-  const tide = (Math.sin(tidePhase) + 1) / 2
-  const retreat = (Math.sin(retreatPhase) + 1) / 2
-
-  const bandPath = new Path2D()
-  bandPath.addPath(coastPath)
-  bandPath.addPath(beachPath)
-
-  ctx.save()
-  ctx.clip(bandPath, 'evenodd')
-  ctx.globalCompositeOperation = 'lighter'
-
-  const baseInner = island.radius * 0.9
-  const baseOuter = island.radius * 1.04
-  const innerRadius = baseInner - island.radius * 0.025 * tide
-  const outerRadius = baseOuter + island.radius * 0.03 * retreat
-
-  const gradient = ctx.createRadialGradient(0, 0, innerRadius, 0, 0, outerRadius)
-  gradient.addColorStop(0, 'rgba(255, 255, 255, 0)')
-  gradient.addColorStop(0.45, 'rgba(206, 236, 255, 0.18)')
-  gradient.addColorStop(0.82, 'rgba(150, 208, 238, 0.22)')
-  gradient.addColorStop(1, 'rgba(110, 186, 226, 0.12)')
-
-  const extent = island.radius * 2.2
-  ctx.globalAlpha = 0.5
-  ctx.fillStyle = gradient
-  ctx.fillRect(-extent, -extent, extent * 2, extent * 2)
-
-  const foamInner = innerRadius - island.radius * 0.01
-  const foamOuter = innerRadius + island.radius * (0.06 + tide * 0.02)
-  const foamGradient = ctx.createRadialGradient(0, 0, foamInner, 0, 0, foamOuter)
-  foamGradient.addColorStop(0, 'rgba(255, 255, 255, 0.32)')
-  foamGradient.addColorStop(0.7, 'rgba(226, 246, 255, 0.28)')
-  foamGradient.addColorStop(1, 'rgba(226, 246, 255, 0)')
-
-  ctx.globalAlpha = 0.32 + tide * 0.18
-  ctx.fillStyle = foamGradient
-  ctx.fillRect(-extent, -extent, extent * 2, extent * 2)
-
-  ctx.restore()
-}
-
-function drawWaterHalo(ctx, island, coastPath) {
-  ctx.save()
-  ctx.globalCompositeOperation = 'lighter'
-  ctx.globalAlpha = 0.2
-  ctx.strokeStyle = 'rgba(223, 248, 255, 0.7)'
-  ctx.lineWidth = 6
-  ctx.stroke(coastPath)
-  ctx.globalAlpha = 0.12
-  ctx.lineWidth = 12
-  ctx.stroke(coastPath)
-  ctx.restore()
-}
-
-function drawShore(ctx, island, coastPath) {
-  ctx.save()
-  ctx.fillStyle = island.palette.shore
-  ctx.fill(coastPath)
-  applyTexture(ctx, coastPath, island, 'shore', {
-    opacity: 0.32,
-    baseColor: hexToRgba(island.palette.highlight, 0.18),
-    baseAlpha: 0.06,
-    highlightColor: hexToRgba('#ffffff', 0.65),
-    shadowColor: hexToRgba(island.palette.cliffs, 0.35),
-    density: 0.012,
-    dotSize: 1.6,
-    minAlpha: 0.05,
-    maxAlpha: 0.2,
-  })
-  ctx.strokeStyle = 'rgba(32, 42, 48, 0.32)'
-  ctx.lineWidth = 3.2
-  ctx.stroke(coastPath)
-
-  ctx.clip(coastPath)
-  const glow = ctx.createRadialGradient(0, 0, island.radius * 0.3, 0, 0, island.radius * 1.05)
-  glow.addColorStop(0, 'rgba(255, 255, 255, 0)')
-  glow.addColorStop(0.65, 'rgba(255, 255, 255, 0)')
-  glow.addColorStop(1, hexToRgba(island.palette.highlight, 0.3))
-  ctx.globalAlpha = 0.55
-  ctx.fillStyle = glow
-  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
-  ctx.restore()
-}
-
-function drawBeach(ctx, island, beachPath) {
-  ctx.save()
-  ctx.fillStyle = island.palette.beach
-  ctx.fill(beachPath)
-  applyTexture(ctx, beachPath, island, 'beach', {
-    opacity: 0.34,
-    baseColor: hexToRgba(island.palette.shore, 0.2),
-    baseAlpha: 0.05,
-    highlightColor: hexToRgba('#ffffff', 0.7),
-    shadowColor: hexToRgba(island.palette.cliffs, 0.28),
-    density: 0.02,
-    dotSize: 1.2,
-    minAlpha: 0.06,
-    maxAlpha: 0.22,
-    accentColor: hexToRgba(island.palette.highlight, 0.55),
-    accentDensity: 0.0014,
-    accentWidth: 0.55,
-    accentAlpha: 0.1,
-    accentLength: 6,
-  })
-
-  ctx.clip(beachPath)
-  const warmth = ctx.createLinearGradient(-island.radius, -island.radius, island.radius, island.radius)
-  warmth.addColorStop(0, 'rgba(255, 255, 255, 0.4)')
-  warmth.addColorStop(0.5, 'rgba(255, 255, 255, 0.05)')
-  warmth.addColorStop(1, hexToRgba(island.palette.cliffs, 0.18))
-  ctx.globalAlpha = 0.45
-  ctx.fillStyle = warmth
-  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
-
-  ctx.restore()
-}
-
-function drawGrass(ctx, island, grassPath) {
-  ctx.save()
-  ctx.fillStyle = island.palette.grass
-  ctx.fill(grassPath)
-  applyTexture(ctx, grassPath, island, 'grass', {
-    opacity: 0.26,
-    baseColor: hexToRgba(island.palette.highlight, 0.2),
-    baseAlpha: 0.04,
-    highlightColor: hexToRgba(island.palette.highlight, 0.75),
-    shadowColor: 'rgba(10, 64, 36, 0.6)',
-    density: 0.024,
-    dotSize: 1.9,
-    minAlpha: 0.05,
-    maxAlpha: 0.18,
-    accentColor: 'rgba(255, 255, 255, 0.28)',
-    accentDensity: 0.0012,
-    accentWidth: 0.6,
-    accentAlpha: 0.12,
-    accentLength: 10,
-  })
-
-  ctx.clip(grassPath)
-  const gradient = ctx.createRadialGradient(0, 0, island.radius * 0.22, 0, 0, island.radius * 0.92)
-  gradient.addColorStop(0, hexToRgba(island.palette.highlight, 0.32))
-  gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.05)')
-  gradient.addColorStop(1, 'rgba(0, 0, 0, 0.24)')
-  ctx.globalAlpha = 0.5
-  ctx.fillStyle = gradient
-  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
-  ctx.restore()
-}
-
-function addMeadowHighlights(ctx, island, grassPath) {
-  if (!island.highlights?.length) {
-    return
-  }
-
-  ctx.save()
-  ctx.clip(grassPath)
-  for (const highlight of island.highlights) {
-    const meadow = ctx.createRadialGradient(highlight.x, highlight.y, 0, highlight.x, highlight.y, highlight.radius)
-    meadow.addColorStop(0, hexToRgba(island.palette.highlight, 0.48))
-    meadow.addColorStop(1, 'rgba(255, 255, 255, 0)')
-    ctx.fillStyle = meadow
-    ctx.beginPath()
-    ctx.arc(highlight.x, highlight.y, highlight.radius, 0, TWO_PI)
-    ctx.fill()
-  }
-  ctx.restore()
-}
-
-function drawStreamsOnIsland(ctx, island, grassPath) {
-  if (!island.streams?.length) {
-    return
-  }
-
-  ctx.save()
-  ctx.clip(grassPath)
-  ctx.lineCap = 'round'
-  for (const stream of island.streams) {
-    ctx.strokeStyle = 'rgba(45, 136, 172, 0.78)'
-    ctx.lineWidth = stream.width
-    ctx.beginPath()
-    ctx.moveTo(stream.start.x, stream.start.y)
-    ctx.bezierCurveTo(stream.control1.x, stream.control1.y, stream.control2.x, stream.control2.y, stream.end.x, stream.end.y)
-    ctx.stroke()
-
-    ctx.strokeStyle = 'rgba(215, 242, 255, 0.75)'
-    ctx.lineWidth = stream.width * 0.45
-    ctx.beginPath()
-    ctx.moveTo(stream.start.x, stream.start.y)
-    ctx.bezierCurveTo(stream.control1.x, stream.control1.y, stream.control2.x, stream.control2.y, stream.end.x, stream.end.y)
+    ctx.moveTo(0, y)
+    ctx.lineTo(width, y)
     ctx.stroke()
   }
   ctx.restore()
 }
 
-function drawCanopyBase(ctx, island, canopyPath) {
-  ctx.save()
-  ctx.fillStyle = hexToRgba(island.palette.canopy, 0.92)
-  ctx.fill(canopyPath)
-  applyTexture(ctx, canopyPath, island, 'canopy', {
-    opacity: 0.22,
-    baseColor: hexToRgba(island.palette.highlight, 0.25),
-    baseAlpha: 0.05,
-    highlightColor: hexToRgba(island.palette.highlight, 0.82),
-    shadowColor: 'rgba(6, 38, 24, 0.7)',
-    density: 0.028,
-    dotSize: 1.5,
-    minAlpha: 0.05,
-    maxAlpha: 0.16,
-    accentColor: 'rgba(12, 60, 32, 0.55)',
-    accentDensity: 0.0018,
-    accentWidth: 0.8,
-    accentAlpha: 0.16,
-    accentLength: 9,
-  })
-
-  ctx.clip(canopyPath)
-  const depth = ctx.createRadialGradient(0, 0, island.radius * 0.14, 0, 0, island.radius * 0.6)
-  depth.addColorStop(0, hexToRgba(island.palette.highlight, 0.35))
-  depth.addColorStop(1, 'rgba(0, 0, 0, 0.35)')
-  ctx.globalAlpha = 0.55
-  ctx.fillStyle = depth
-  ctx.fillRect(-island.radius, -island.radius, island.radius * 2, island.radius * 2)
-  ctx.restore()
-}
-
-function drawBroadleafTree(ctx, tree, palette) {
-  const canopyWidth = tree.size * 2.8
-  const canopyHeight = tree.size * 2.1
-  const trunkHeight = tree.size * 1.25
-  const trunkWidth = tree.size * 0.5
-
-  ctx.save()
-  ctx.translate(tree.x, tree.y)
-  ctx.rotate(tree.lean * 0.18)
-
-  ctx.save()
-  ctx.translate(tree.size * 0.28, canopyHeight * 0.6)
-  ctx.fillStyle = 'rgba(15, 42, 28, 0.32)'
-  ctx.beginPath()
-  ctx.ellipse(0, 0, canopyWidth * 0.52, canopyHeight * 0.3, 0, 0, TWO_PI)
-  ctx.fill()
-  ctx.restore()
-
-  const trunkGradient = ctx.createLinearGradient(0, canopyHeight * 0.1, 0, canopyHeight * 0.1 + trunkHeight)
-  trunkGradient.addColorStop(0, hexToRgba(palette.cliffs, 0.85))
-  trunkGradient.addColorStop(1, 'rgba(44, 26, 16, 0.9)')
-  ctx.fillStyle = trunkGradient
-  ctx.beginPath()
-  ctx.moveTo(-trunkWidth / 2, canopyHeight * 0.1)
-  ctx.lineTo(-trunkWidth / 2, canopyHeight * 0.1 + trunkHeight)
-  ctx.quadraticCurveTo(0, canopyHeight * 0.1 + trunkHeight + tree.size * 0.35, trunkWidth / 2, canopyHeight * 0.1 + trunkHeight)
-  ctx.lineTo(trunkWidth / 2, canopyHeight * 0.1)
-  ctx.closePath()
-  ctx.fill()
-
-  const canopyGradient = ctx.createRadialGradient(
-    -canopyWidth * 0.3,
-    -canopyHeight * 0.8,
-    tree.size * 0.35,
-    0,
-    0,
-    canopyWidth,
-  )
-  canopyGradient.addColorStop(0, hexToRgba(palette.highlight, 0.95))
-  canopyGradient.addColorStop(0.5, hexToRgba(palette.canopy, 0.98))
-  canopyGradient.addColorStop(1, 'rgba(14, 48, 30, 0.95)')
-  ctx.fillStyle = canopyGradient
-  ctx.beginPath()
-  ctx.moveTo(0, -canopyHeight)
-  ctx.bezierCurveTo(
-    canopyWidth * 0.5,
-    -canopyHeight * 0.65,
-    canopyWidth * 0.7,
-    canopyHeight * 0.05,
-    canopyWidth * 0.2,
-    canopyHeight * 0.65,
-  )
-  ctx.bezierCurveTo(
-    canopyWidth * 0.05,
-    canopyHeight * 0.85,
-    -canopyWidth * 0.05,
-    canopyHeight * 0.85,
-    -canopyWidth * 0.2,
-    canopyHeight * 0.65,
-  )
-  ctx.bezierCurveTo(
-    -canopyWidth * 0.7,
-    canopyHeight * 0.05,
-    -canopyWidth * 0.5,
-    -canopyHeight * 0.65,
-    0,
-    -canopyHeight,
-  )
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.globalAlpha = 0.45
-  ctx.strokeStyle = hexToRgba(palette.highlight, 0.4)
-  ctx.lineWidth = tree.size * 0.18
-  ctx.beginPath()
-  ctx.moveTo(-canopyWidth * 0.18, -canopyHeight * 0.35)
-  ctx.quadraticCurveTo(0, -canopyHeight * 0.7, canopyWidth * 0.22, -canopyHeight * 0.15)
-  ctx.stroke()
-  ctx.globalAlpha = 1
-
-  ctx.restore()
-}
-
-function drawConiferTree(ctx, tree, palette) {
-  const height = tree.size * 3.6
-  const baseWidth = tree.size * 1.65
-
-  ctx.save()
-  ctx.translate(tree.x, tree.y)
-  ctx.rotate(tree.lean * 0.15)
-
-  ctx.save()
-  ctx.translate(tree.size * 0.12, tree.size * 1.05)
-  ctx.fillStyle = 'rgba(15, 42, 28, 0.28)'
-  ctx.beginPath()
-  ctx.ellipse(0, 0, baseWidth * 0.85, tree.size * 0.55, 0, 0, TWO_PI)
-  ctx.fill()
-  ctx.restore()
-
-  const trunkHeight = tree.size * 1.1
-  const trunkWidth = tree.size * 0.35
-  const trunkGradient = ctx.createLinearGradient(0, height * 0.25, 0, height * 0.25 + trunkHeight)
-  trunkGradient.addColorStop(0, hexToRgba(palette.cliffs, 0.75))
-  trunkGradient.addColorStop(1, 'rgba(40, 22, 12, 0.92)')
-  ctx.fillStyle = trunkGradient
-  ctx.beginPath()
-  ctx.moveTo(-trunkWidth / 2, height * 0.25)
-  ctx.lineTo(-trunkWidth / 2, height * 0.25 + trunkHeight)
-  ctx.lineTo(trunkWidth / 2, height * 0.25 + trunkHeight)
-  ctx.lineTo(trunkWidth / 2, height * 0.25)
-  ctx.closePath()
-  ctx.fill()
-
-  const layers = tree.layers ?? 4
-  for (let i = 0; i < layers; i += 1) {
-    const t = layers === 1 ? 0 : i / (layers - 1)
-    const layerHeight = height * (0.12 + (1 - t) * 0.24)
-    const y = -height * 0.42 + t * height * 0.72
-    const width = baseWidth * (1 - t * 0.5)
-    const gradient = ctx.createLinearGradient(0, y - layerHeight, 0, y + layerHeight)
-    gradient.addColorStop(0, hexToRgba(palette.highlight, 0.85))
-    gradient.addColorStop(0.55, hexToRgba(palette.canopy, 0.95))
-    gradient.addColorStop(1, 'rgba(10, 48, 30, 0.95)')
-    ctx.fillStyle = gradient
-    ctx.beginPath()
-    ctx.moveTo(0, y - layerHeight)
-    ctx.bezierCurveTo(width * 0.52, y - layerHeight * 0.05, width * 0.5, y + layerHeight * 0.45, 0, y + layerHeight)
-    ctx.bezierCurveTo(-width * 0.5, y + layerHeight * 0.45, -width * 0.52, y - layerHeight * 0.05, 0, y - layerHeight)
-    ctx.closePath()
-    ctx.fill()
-  }
-
-  ctx.globalAlpha = 0.5
-  ctx.strokeStyle = hexToRgba(palette.highlight, 0.35)
-  ctx.lineWidth = tree.size * 0.12
-  ctx.beginPath()
-  ctx.moveTo(0, -height * 0.48)
-  ctx.lineTo(0, height * 0.2)
-  ctx.stroke()
-  ctx.globalAlpha = 1
-
-  ctx.restore()
-}
-
-function drawTreeClusters(ctx, island, canopyPath) {
-  if (!island.treeClusters?.length) {
-    return
-  }
-
-  ctx.save()
-  ctx.clip(canopyPath)
-  for (const cluster of island.treeClusters) {
-    for (const tree of cluster.trees) {
-      if (tree.type === 'conifer') {
-        drawConiferTree(ctx, tree, island.palette)
-      } else {
-        drawBroadleafTree(ctx, tree, island.palette)
-      }
-    }
-  }
-  ctx.restore()
-}
-
-function drawCliffs(ctx, island, coastPath) {
-  if (!island.cliffs?.length) {
-    return
-  }
-
-  ctx.save()
-  ctx.clip(coastPath)
-  ctx.lineCap = 'round'
-  for (const cliff of island.cliffs) {
-    const cliffPoints = island.coastline.filter((point) => isAngleBetween(point.angle, cliff.startAngle, cliff.endAngle))
-    if (cliffPoints.length < 2) {
-      continue
-    }
-
-    const interiorScale = Math.max(0.72, 0.9 - cliff.layers * 0.04)
-    const shadeColor = hexToRgba(island.palette.cliffs, Math.min(0.65, 0.24 + cliff.layers * 0.12))
-    const highlight = hexToRgba(island.palette.highlight, 0.35)
-
-    for (const point of cliffPoints) {
-      ctx.strokeStyle = shadeColor
-      ctx.lineWidth = 3.2 + cliff.layers * 0.25
-      ctx.beginPath()
-      ctx.moveTo(point.x, point.y)
-      ctx.lineTo(point.x * interiorScale, point.y * interiorScale)
-      ctx.stroke()
-    }
-
-    ctx.strokeStyle = highlight
-    ctx.lineWidth = 2.1
-    ctx.beginPath()
-    ctx.moveTo(cliffPoints[0].x * interiorScale, cliffPoints[0].y * interiorScale)
-    for (let i = 1; i < cliffPoints.length; i += 1) {
-      const point = cliffPoints[i]
-      ctx.lineTo(point.x * interiorScale, point.y * interiorScale)
-    }
-    ctx.stroke()
-  }
-  ctx.restore()
-}
-
-function drawBoatShadow(ctx, boat) {
-  ctx.save()
-  const stretch = Math.min(boat.speed / MAX_FORWARD_SPEED, 1)
-  ctx.globalAlpha = 0.22 + stretch * 0.08
-  ctx.fillStyle = 'rgba(22, 32, 42, 0.4)'
-  const bowLength = 46 + stretch * 18
-  ctx.beginPath()
-  ctx.moveTo(bowLength, 0)
-  ctx.quadraticCurveTo(28, 20, -40, 16)
-  ctx.quadraticCurveTo(-52, 0, -40, -16)
-  ctx.quadraticCurveTo(28, -20, bowLength, 0)
-  ctx.closePath()
-  ctx.fill()
-  ctx.restore()
-}
-
-function drawBoatHull(ctx) {
-  const hullGradient = ctx.createLinearGradient(-48, 0, 52, 0)
-  hullGradient.addColorStop(0, '#6b3a16')
-  hullGradient.addColorStop(0.35, '#b87a3b')
-  hullGradient.addColorStop(0.7, '#e7c493')
-  hullGradient.addColorStop(1, '#f7dcb1')
-  ctx.fillStyle = hullGradient
-  ctx.beginPath()
-  ctx.moveTo(54, 0)
-  ctx.quadraticCurveTo(40, -20, 8, -24)
-  ctx.quadraticCurveTo(-30, -22, -46, -8)
-  ctx.quadraticCurveTo(-56, 0, -46, 8)
-  ctx.quadraticCurveTo(-30, 22, 8, 24)
-  ctx.quadraticCurveTo(40, 20, 54, 0)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.strokeStyle = '#392010'
-  ctx.lineWidth = 3
-  ctx.stroke()
-
-  ctx.strokeStyle = 'rgba(255, 236, 204, 0.85)'
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.moveTo(36, -12)
-  ctx.quadraticCurveTo(10, -18, -32, -10)
-  ctx.stroke()
-  ctx.beginPath()
-  ctx.moveTo(36, 12)
-  ctx.quadraticCurveTo(10, 18, -32, 10)
-  ctx.stroke()
-}
-
-function drawDeckDetails(ctx) {
-  ctx.save()
-
-  ctx.fillStyle = '#d2a369'
-  ctx.beginPath()
-  ctx.moveTo(44, 0)
-  ctx.quadraticCurveTo(28, -12, -30, -10)
-  ctx.quadraticCurveTo(-36, 0, -30, 10)
-  ctx.quadraticCurveTo(28, 12, 44, 0)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.fillStyle = '#c28d4f'
-  ctx.beginPath()
-  ctx.moveTo(-12, -10)
-  ctx.lineTo(-30, -9)
-  ctx.quadraticCurveTo(-34, 0, -30, 9)
-  ctx.lineTo(-12, 10)
-  ctx.quadraticCurveTo(-6, 0, -12, -10)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.fillStyle = '#f6e3bb'
-  ctx.fillRect(-8, -6, 44, 12)
-
-  ctx.strokeStyle = 'rgba(92, 58, 30, 0.45)'
-  ctx.lineWidth = 1.6
-  ctx.beginPath()
-  ctx.moveTo(-28, -8)
-  ctx.lineTo(38, -4)
-  ctx.moveTo(-28, 8)
-  ctx.lineTo(38, 4)
-  ctx.stroke()
-
-  ctx.strokeStyle = 'rgba(255, 245, 220, 0.55)'
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.moveTo(-36, 0)
-  ctx.lineTo(36, 0)
-  ctx.stroke()
-
-  ctx.fillStyle = '#855b34'
-  ctx.beginPath()
-  ctx.moveTo(-26, -7)
-  ctx.quadraticCurveTo(-34, 0, -26, 7)
-  ctx.lineTo(-10, 7)
-  ctx.quadraticCurveTo(-4, 0, -10, -7)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.fillStyle = '#f0f7ff'
-  ctx.fillRect(-18, -4, 6, 8)
-
-  ctx.fillStyle = '#fff3d0'
-  ctx.beginPath()
-  ctx.moveTo(36, 0)
-  ctx.lineTo(24, -8)
-  ctx.lineTo(24, 8)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.fillStyle = 'rgba(220, 60, 46, 0.9)'
-  ctx.beginPath()
-  ctx.moveTo(42, 0)
-  ctx.lineTo(30, -10)
-  ctx.lineTo(30, 10)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.restore()
-}
-
-function drawAnchor(ctx, boat) {
-  if (boat.anchorState === 'stowed' && boat.anchorProgress === 0) {
-    return
-  }
-
-  let progress = 0
-  if (boat.anchorState === 'dropping') {
-    progress = boat.anchorProgress
-  } else if (boat.anchorState === 'anchored') {
-    progress = 1
-  } else if (boat.anchorState === 'weighing') {
-    progress = 1 - boat.anchorProgress
-  }
-
-  const eased = progress * progress * (3 - 2 * progress)
-  const lineLength = (26 + eased * 46) * 0.5
-  const lateralLean = (6 + eased * 18) * 0.5
-  const sway = Math.sin(boat.wakeTimer * 1.4) * (1 + eased * 2)
-
-  ctx.save()
-  ctx.translate(-22, 16)
-
-  ctx.fillStyle = '#b48b56'
-  ctx.beginPath()
-  ctx.arc(0, 0, 5.5, 0, Math.PI * 2)
-  ctx.fill()
-
-  ctx.strokeStyle = 'rgba(240, 228, 198, 0.9)'
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.moveTo(0, 0)
-  ctx.quadraticCurveTo(-lateralLean * 0.45 - sway, lineLength * 0.55, -lateralLean - sway * 0.3, lineLength)
-  ctx.stroke()
-
-  ctx.strokeStyle = 'rgba(172, 146, 110, 0.35)'
-  ctx.lineWidth = 3.2
-  ctx.beginPath()
-  ctx.moveTo(-2, 0)
-  ctx.quadraticCurveTo(-lateralLean * 0.5 - sway, lineLength * 0.52, -lateralLean - sway * 0.28, lineLength)
-  ctx.stroke()
-
-  ctx.restore()
-}
-
-function drawMastAndSails(ctx, boat) {
-  const { sailLevel } = boat
-  ctx.save()
-  ctx.translate(-4, 0)
-
-  ctx.fillStyle = '#5b3a20'
-  ctx.fillRect(-2, -26, 4, 52)
-  ctx.fillStyle = '#a06a38'
-  ctx.fillRect(-1, -26, 2, 52)
-
-  const boomLength = 28 + sailLevel * 8
-  ctx.fillStyle = '#7a4c27'
-  ctx.fillRect(-2, -3, boomLength, 6)
-
-  if (sailLevel < 0.08) {
-    const bundled = 20
-    ctx.fillStyle = '#dce3ed'
-    ctx.fillRect(-2, -6, bundled, 12)
-    ctx.strokeStyle = '#c6ccd8'
-    ctx.lineWidth = 1.2
-    ctx.beginPath()
-    ctx.moveTo(-2, -4)
-    ctx.lineTo(bundled - 2, -4)
-    ctx.moveTo(-2, 4)
-    ctx.lineTo(bundled - 2, 4)
-    ctx.stroke()
-  } else {
-    const eased = sailLevel * sailLevel * (3 - 2 * sailLevel)
-    const sailReach = 18 + eased * 22
-    const footDrop = 10 + eased * 10
-    const billow = 6 + eased * 14
-
-    ctx.fillStyle = '#f1f5ff'
-    ctx.beginPath()
-    ctx.moveTo(0, -24)
-    ctx.quadraticCurveTo(-sailReach * 0.28, -24 - billow * 0.15, -sailReach, -6)
-    ctx.lineTo(-sailReach, footDrop)
-    ctx.quadraticCurveTo(-sailReach * 0.36, footDrop - billow * 0.25, 0, 12)
-    ctx.closePath()
-    ctx.fill()
-
-    ctx.strokeStyle = '#cfdcee'
-    ctx.lineWidth = 1.8
-    ctx.stroke()
-
-    ctx.strokeStyle = 'rgba(204, 222, 248, 0.7)'
-    ctx.lineWidth = 1.2
-    ctx.beginPath()
-    ctx.moveTo(-sailReach * 0.78, -2)
-    ctx.quadraticCurveTo(-sailReach * 0.54, -2 + billow * 0.45, -sailReach * 0.2, footDrop - 4)
-    ctx.stroke()
-
-    ctx.globalAlpha = 0.35
-    ctx.fillStyle = '#e4ecf8'
-    ctx.beginPath()
-    ctx.moveTo(0, -20)
-    ctx.quadraticCurveTo(-sailReach * 0.4, -10, -sailReach * 0.2, 6)
-    ctx.lineTo(0, 8)
-    ctx.closePath()
-    ctx.fill()
-    ctx.globalAlpha = 1
-  }
-
-  ctx.fillStyle = '#ff5b5b'
-  ctx.beginPath()
-  ctx.moveTo(0, -26)
-  ctx.lineTo(12, -32)
-  ctx.lineTo(0, -18)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.restore()
-}
-
-function addVignette(ctx, width, height) {
-  const vignette = ctx.createRadialGradient(width / 2, height / 2, Math.min(width, height) * 0.2, width / 2, height / 2, Math.max(width, height) * 0.7)
-  vignette.addColorStop(0, 'rgba(0,0,0,0)')
-  vignette.addColorStop(1, 'rgba(5, 10, 18, 0.4)')
-  ctx.fillStyle = vignette
-  ctx.fillRect(0, 0, width, height)
-}
 
 export default App
